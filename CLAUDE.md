@@ -9,7 +9,12 @@ Two independent npm projects with **no workspace root** — there is no root `pa
 - `backend/` — AdonisJS 7 REST API, `http://localhost:3333`
 - `frontend/` — React 19 + Vite, `http://localhost:5173`
 
-Course practice repo (FlowSync, team task management). `s1/start` is the starting point; `origin/s1/end` holds the finished state.
+Also at the root:
+
+- `docs/` — product and verification documents, in Spanish: `prd/` (PRD of the "registro de estado técnico" MVP), `backlog/` (user stories and tickets, with ticket status and technical decisions), `verificaciones/` (dated verification reports).
+- `openspec/` — OpenSpec (spec-driven changes, see **Claude Code harness**): `specs/` holds the current specs (today only `aislamiento-de-tests`), `changes/archive/` the completed changes (today `2026-10-25-aislar-base-de-tests`, i.e. ticket T-01). No change is active.
+
+Course practice repo (FlowSync, team task management). `s1/start` is the course starting point; `origin/s1/end` and `origin/s2/start` point to the same commit (the course's end of module 1 / start of module 2). The work in this clone is on local branches stacked on `s1/start`: `feat/auth-login` (auth frontend), `docs/clase-2-prd-backlog` (PRD, stories, tickets) and `chore/clase-3-tests-aislados` (OpenSpec integration and T-01).
 
 ## Node version — read this first
 
@@ -58,7 +63,9 @@ node ace test --failed --watch
 - The lock is covered by `tests/unit/test_database_lock_concurrency.spec.ts`: real processes, synchronized with an IPC start barrier and FIFO pause points (no sleeps), check that only one process acquires the lock and only one enters the abandoned-lock replacement at a time. Scope of that evidence: local Linux file system, six processes per scenario, coordinated (forced) interleavings, and two detected mutations (no critical section, non-atomic creation). It does not prove behavior under heavier load, on network file systems or on other operating systems.
 - The safety check aborts before any database is opened, deleted or migrated if the configured file is not exactly `tmp/db.test.sqlite3`, resolves to the dev database (path, symlink or same inode), is a symlink, or the connection is already open. A second concurrent run aborts on the lock without deleting anything.
 - Functional groups isolate each test with `group.each.setup(() => testUtils.db().withGlobalTransaction())`; HTTP requests made by the api client share that transaction.
-- To verify that a test run leaves the dev database untouched, stop every process connected to `tmp/db.sqlite3` (the dev server writes to it on its own) and compare its checksum, and any `-journal`/`-wal`/`-shm` files, before and after `node ace test`.
+- To verify that a test run leaves the dev database untouched, stop every process connected to `tmp/db.sqlite3` (the dev server writes to it on its own) and compare its checksum, and any `-journal`/`-wal`/`-shm` files, before and after `node ace test`. A matching checksum shows the file was **not modified**, not that it was **not opened**; the requirement is that it is never opened.
+- **Evidence for the test-database safeguard, by kind.** *Automated:* the unit and functional tests above. *Reported observation* (manual runs, artifacts not kept): the dev-database integrity check, and the traced verification in [`docs/verificaciones/2026-10-25-salvaguarda-base-de-tests.md`](docs/verificaciones/2026-10-25-salvaguarda-base-de-tests.md) — a dangerous config aborted before any operation or test, and in two runs the protected (witness) database got only metadata calls, never an open. *Code inspection:* hook order in `tests/bootstrap.ts` and that Japa/Lucid boot opens no connection before the safeguard. That report also records an **incident**: the run rewrote `backend/node_modules/.cache/@japa/runner/summary.json` through a symlinked `node_modules`; its previous content is unknown and was not restored.
+- **Disposable copies for verification: a symlinked dependency is not read-only.** Tools write caches into it (Japa writes `node_modules/.cache/`). Either isolate effectively (own dependencies, or a read-only mount) or redirect known writes into the copy, and check **every** write destination in the trace after resolving symlinks and directory descriptors, not just by path prefix. `HEAD` and `git status` unchanged do not mean the environment is unchanged: ignored files (caches, `tmp/`) do not show there.
 
 HMR only covers `app/controllers/**` and `app/middleware/*` (`hotHook.boundaries`); edits anywhere else full-restart the server.
 
@@ -156,4 +163,9 @@ Observed backend contract (curl, synthetic users): signup/login success → **20
 ## Claude Code harness
 
 - `.claude/settings.json` — `PostToolUse` hook on `Write|Edit` runs `.claude/hooks/format-frontend.sh`: Prettier on the edited file if it resolves inside `frontend/`, nothing otherwise. It needs `jq` and `frontend/node_modules` installed. On failure (missing Prettier, syntax error, etc.) it exits 2 and Claude sees the error; the edit itself is already applied. Files changed through Bash are not covered.
-- `.claude/agents/adversarial-reviewer.md` — read-only reviewer (`Read`, `Grep`, `Glob`; no Bash). It cannot run git, so pass it the `git diff` and the list of new untracked files in the prompt.
+- `.claude/agents/adversarial-reviewer.md` — read-only reviewer (`Read`, `Grep`, `Glob`; no Bash). It cannot run git, so pass it the `git diff` and the list of new untracked files in the prompt. Its description targets uncommitted changes, but it has also reviewed a committed change (`6f2827d`) when the prompt stated that scope explicitly and included the commit's diff and the relevant files; that is a per-request use, not a change to the agent.
+- **OpenSpec** (CLI 1.15.0, installed globally with the asdf Node; not a project dependency). Run every `openspec` command with `OPENSPEC_TELEMETRY=0`: the CLI collects anonymous usage stats by default.
+  - `openspec/config.yaml`: schema `spec-driven`; artifacts written in Spanish, keeping OpenSpec's structural headings and `SHALL`/`MUST` keywords in English.
+  - `.claude/skills/openspec-{explore,propose,apply-change,update-change,sync-specs,archive-change}/` and `.claude/commands/opsx/{explore,propose,apply,update,sync,archive}.md` — generated by `openspec init --tools claude`; regenerate with `openspec update`, do not hand-edit.
+  - Flow used for T-01: `openspec new change <name>` → write proposal, delta specs, design and tasks (`openspec instructions <artifact> --change <name>`) → `openspec validate <name> --strict` → apply tasks → `openspec archive <name>`, which merges the deltas into `openspec/specs/` and moves the change to `openspec/changes/archive/`. The archive is historical: do not edit it afterwards.
+  - OpenSpec is not required for every task; it was used for T-01 as practice.

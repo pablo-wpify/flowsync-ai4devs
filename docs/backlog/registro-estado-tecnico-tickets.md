@@ -221,13 +221,33 @@ Respeta dependencias y pone P1 antes que P2:
   [`2026-10-25-aislar-base-de-tests`](../../openspec/changes/archive/2026-10-25-aislar-base-de-tests/proposal.md)
   (propuesta, diseño, tareas y evidencia), con sus requisitos vigentes en
   [`openspec/specs/aislamiento-de-tests/spec.md`](../../openspec/specs/aislamiento-de-tests/spec.md).
-  Los criterios verificables de esta ficha se cumplieron (tareas 3.1, 4.1 y la
-  salvaguarda de las tareas 1.2–2.2 del cambio). **Diferencia con el alcance
-  original:** se agregaron tests unitarios, pero solo de la propia
-  infraestructura de tests (salvaguarda, borrado acotado y marca de
-  exclusividad), no de funcionalidades. **Límites:** la evidencia vale para
-  Linux con sistema de archivos local; la recuperación de un `.lock.reap`
-  abandonado es manual (procedimiento en `CLAUDE.md`).
+  Los criterios verificables de esta ficha tienen evidencia, de distinto tipo
+  según el criterio (ver abajo). **Diferencia con el alcance original:** se
+  agregaron tests unitarios, pero solo de la propia infraestructura de tests
+  (salvaguarda, borrado acotado y marca de exclusividad), no de
+  funcionalidades. **Límites:** la evidencia vale para Linux con sistema de
+  archivos local; la recuperación de un `.lock.reap` abandonado es manual
+  (procedimiento en `CLAUDE.md`).
+- **Evidencia, por tipo:**
+  - *Automatizada (se reproduce ejecutando la suite):* las reglas de la
+    salvaguarda y del borrado acotado sobre bases testigo descartables, la
+    exclusividad con procesos reales, que la conexión activa usa
+    `tmp/db.test.sqlite3` y el aislamiento entre tests.
+  - *Observación reportada (ejecuciones manuales, sin artefactos
+    conservados):* la base de desarrollo sin modificaciones con el servidor
+    detenido (tarea 4.1 del cambio); las ejecuciones repetidas, interrumpida y
+    simultánea (4.2–4.4); y la
+    [verificación con traza del 2026-10-25](../verificaciones/2026-10-25-salvaguarda-base-de-tests.md):
+    con una configuración peligrosa la suite abortó antes de cualquier
+    operación o test, y en dos ejecuciones la base protegida (un testigo) no
+    se abrió. Esa verificación registra además un **incidente**: modificó una
+    caché compartida en `node_modules`.
+  - *Inspección de código:* el orden de los hooks de `tests/bootstrap.ts` y
+    que el arranque de Japa y Lucid no abre la conexión antes de la
+    salvaguarda (revisión adversarial).
+  - El requisito no cambia: la base de desarrollo no debe abrirse durante una
+    ejecución de tests. Las observaciones lo respaldan para las ejecuciones
+    registradas; no lo certifican para todas las futuras.
 - **Prioridad:** P1 (sin T-01 no se pueden verificar los tickets de backend).
 - **Tamaño:** M.
   - Supuesto: alcanza con elegir otro archivo SQLite según el entorno.
