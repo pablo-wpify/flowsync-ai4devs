@@ -44,6 +44,10 @@ The frontend now needs **Node >= 22.22** too (`react-router@8` declares `>=22.22
 | `npm run typecheck` | `tsc --noEmit` |
 | `node ace migration:run` | run migrations **and regenerate `database/schema.ts`** |
 | `node ace generate:key` | fill `APP_KEY` in `.env` |
+| `npm run routes:check` | compare the route surface with `contracts/route_surface.v1.json`; never writes it |
+| `npm run routes:update` | regenerate that reference on purpose; review it with `git diff` |
+
+**Route surface contract** (`scripts/check_route_surface.ts`, report: [`docs/verificaciones/2026-10-25-contrato-superficie-rutas.md`](docs/verificaciones/2026-10-25-contrato-superficie-rutas.md)). It compares `node ace list:routes --json` with the committed reference, keeping route and middleware order, anonymous routes included. Each route has a `public` part (methods, pattern, named middleware) and an `internal` part (route name, handler, middleware module). Exit codes: 0 match, 1 differences (a line diff, then a candidate kept in `$TMPDIR/route-surface-*/`, with the `rm -r` command to remove it), 2 generation failed or unexpected format (strict: unknown keys, types or methods fail; the reference must be exactly what `routes:update` writes; raw `ace` output is never printed). The codes hold only once the script runs: under Node < 24 Node cannot load the `.ts` and itself exits 1. A closure middleware or an unlisted method cannot be represented: it fails with 2 until the script is extended. HEAD is excluded: `list:routes` does not list it. It only covers routes: **not** validators, responses, status codes or global middleware. It runs only when someone runs it — no CI or hook calls it. When a route change is intended, run `routes:update` and commit the reference with the change.
 
 Test filtering (Japa) — suites are positional, filters are flags:
 
