@@ -21,7 +21,9 @@ The default shell Node on this machine is **v20.20.2** (nvm shadowing asdf in `P
 TypeError [ERR_UNKNOWN_FILE_EXTENSION]: Unknown file extension ".ts" for .../backend/bin/console.ts
 ```
 
-asdf has 24.8.0 installed and set as global. Activate Node 24 before any backend work; verify with `node -v` before concluding an ace command is broken. The frontend is unaffected — Vite 8 accepts `^20.19.0`.
+asdf has 24.8.0 installed and set as global. Activate Node 24 before any backend work (e.g. prefix `PATH="$HOME/.asdf/shims:$PATH"`); verify with `node -v` before concluding an ace command is broken.
+
+The frontend now needs **Node >= 22.22** too (`react-router@8` declares `>=22.22.0`, `cn` declares `>=22`). Use Node 24 for both projects, including `npm install` — npm 11.6.0 ships with it.
 
 ## Commands
 
@@ -54,6 +56,16 @@ HMR only covers `app/controllers/**` and `app/middleware/*` (`hotHook.boundaries
 
 `npm run dev` · `npm run build` (`tsc -b && vite build`) · `npm run lint` (**oxlint**, not eslint) · `npm run preview` · `npm run format` (Prettier over the whole frontend). There is no test runner. Prettier config is `.prettierrc.json` (`semi: false`, `singleQuote: true`, matching the existing code); a Claude Code hook formats each frontend file Claude edits (see **Claude Code harness**).
 
+`npm run lint` reports one expected warning: `only-export-components` in `src/components/ui/button.tsx` (shadcn exports `buttonVariants` alongside the component).
+
+**shadcn/ui** (CLI 4.22.1, style `radix-nova`, Tailwind v4 via `@tailwindcss/vite`, config in `components.json`). Add components from *outside* the project so npx uses its own install:
+
+```bash
+cd /tmp && npx shadcn@4.22.1 add <component> --cwd <repo>/frontend
+```
+
+Running it from inside `frontend/` resolves the local `shadcn` devDependency, whose `recast` needs `tslib`; after incremental installs npm 11 can leave `node_modules/tslib` missing even though the lockfile has it (it also breaks `vite build` via `radix-ui` → `react-remove-scroll`). `npm ci` fixes the tree without touching the lockfile. CLI-written files bypass the format hook — run `npx prettier --write` on them.
+
 ## Architecture: three codegen loops
 
 This is the part that isn't discoverable from any single file. Three generators run automatically, **their output is committed to git**, and hand-edits get overwritten.
@@ -79,7 +91,7 @@ router.post('signup', [controllers.NewAccount, 'store'])
 
 **3. Tuyau registry → `.adonisjs/client/`**
 
-The `generateRegistry()` hook emits a typed route registry. `backend/package.json` `exports` publishes `./data` and `./registry` — this is the intended channel for the frontend to consume backend route and response types end-to-end. `tests/bootstrap.ts` already uses it, augmenting Japa's `RoutesRegistry` with the generated `Registry` so the api client is typed per route. Nothing in `frontend/` consumes it yet.
+The `generateRegistry()` hook emits a typed route registry. `backend/package.json` `exports` publishes `./data` and `./registry` — this is the intended channel for the frontend to consume backend route and response types end-to-end. `tests/bootstrap.ts` already uses it, augmenting Japa's `RoutesRegistry` with the generated `Registry` so the api client is typed per route. Nothing in `frontend/` consumes it yet: `frontend/src/lib/api.ts` declares its types by hand.
 
 ## API response convention
 
@@ -110,7 +122,18 @@ Routes (`start/routes.ts`, all under `/api/v1`): `auth/signup`, `auth/login` pub
 
 Backend has the auth slice only: `User` model, 3 controllers, 2 migrations. **There are no tests** — `adonisrc.ts` declares `unit` and `functional` suites, but `tests/unit/` and `tests/functional/` don't exist; only `tests/bootstrap.ts` is present. Creating those directories is the first step for any test work.
 
-Frontend is the **untouched Vite starter template** — `App.tsx` is the demo counter page. No router, no API client, no state management.
+Frontend has the auth slice (signup, login, protected profile; **no logout, no Tuyau** — the API client is hand-written):
+
+- `src/lib/api.ts` — `fetch` against `VITE_API_URL` (no Vite proxy; relies on dev CORS). Unwraps `{ data }`, throws `ApiError` with `kind` `network` | `http` | `config`, `status` and the backend's `errors[]`.
+- `src/lib/errors.ts` — maps backend errors to Spanish UI text: 422 per field by VineJS `rule` (`required`, `email`, `database.unique`, `minLength`, `maxLength`, `sameAs`), 400 → bad credentials, network / 5xx → general message.
+- `src/lib/session.ts` — token in **sessionStorage** under `flowsync.token` (per tab, survives reload).
+- `src/auth/` — `AuthProvider` loads `GET /account/profile` whenever there is a token. **Only a 401 clears the session**; network errors and 5xx keep the token and show "Reintentar". Status: `anonymous` | `loading` | `authenticated` | `error`. `ProtectedRoute` guards `/profile`; `PublicOnlyRoute` sends `authenticated`/`loading` users from `/login`/`/signup` to `/profile` but lets `error` through so the user can sign in with another account.
+- Routes: `/login`, `/signup`, `/profile`; anything else → `/profile`. Signup sends `fullName: null` (the backend validator requires the key), does not keep the signup token, and redirects to `/login` with a one-shot success notice and the email prefilled.
+- Imports use the `@/` alias (`tsconfig*.json` `paths` + `vite.config.ts`). UI and error text are in Spanish.
+
+Observed backend contract (curl, synthetic users): signup/login success → **200** `{ data: { user, token } }`; validation → 422 `{ errors: [{ message, rule, field, meta? }] }`; bad credentials → 400 `{ errors: [{ message }] }`; profile without/invalid token → 401.
+
+`npm audit` still reports the pre-existing `vite` 8.0.0–8.1.5 advisory (installed 8.1.4).
 
 ## Local setup
 
@@ -118,6 +141,7 @@ Frontend is the **untouched Vite starter template** — `App.tsx` is the demo co
 - `backend/.env` is required and validated at boot by `start/env.ts` — `NODE_ENV`, `PORT`, `HOST`, `LOG_LEVEL`, `APP_KEY`, `APP_URL`, `SESSION_DRIVER` are all mandatory, so a missing one fails startup rather than degrading. Copy `.env.example` and run `node ace generate:key`.
 - `.env.test` overrides `SESSION_DRIVER=memory`.
 - CORS is `origin: true` in dev, empty allowlist in prod (`config/cors.ts`), with `credentials: true`.
+- `frontend/.env.local` (gitignored via `*.local`) must set `VITE_API_URL` — copy `frontend/.env.example`. Without it every request fails with a "falta VITE_API_URL" message.
 
 ## Claude Code harness
 
