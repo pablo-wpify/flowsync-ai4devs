@@ -1,0 +1,59 @@
+# Route surface contract (backend/scripts/check_route_surface.ts).
+#
+# Deterministic, no secrets, no model. Runs the PR's code: dependency install
+# scripts are skipped, but routes:check runs the PR's checker and boots its
+# app, so the token is read-only. A green run does not vouch for the checker
+# or the reference: the PR can change both. Not a
+# required check: no branch protection or ruleset is configured. Design and
+# limits: docs/ci/diseno-pipeline.md.
+name: route-surface
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: route-surface-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  route-surface:
+    name: route-surface
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    # Synthetic values: no .env file is used. APP_KEY is a placeholder, not a secret.
+    env:
+      TZ: UTC
+      NODE_ENV: development
+      PORT: '3333'
+      HOST: localhost
+      LOG_LEVEL: info
+      APP_KEY: ci-placeholder-not-a-secret-0000
+      APP_URL: http://localhost:3333
+      SESSION_DRIVER: cookie
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.8.0
+          package-manager-cache: false
+
+      # The routes check does not need native builds (better-sqlite3, @swc/core).
+      - name: Install from the committed lockfile
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      # Exit codes: 0 match, 1 differences, 2 generation failed or unexpected format.
+      # GitHub shows 1 and 2 alike (a failed step); the log text tells them apart.
+      - name: Check the route surface
+        run: npm run routes:check

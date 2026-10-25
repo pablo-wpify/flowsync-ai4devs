@@ -11,7 +11,8 @@ Two independent npm projects with **no workspace root** — there is no root `pa
 
 Also at the root:
 
-- `docs/` — product and verification documents, in Spanish: `prd/` (PRD of the "registro de estado técnico" MVP), `backlog/` (user stories and tickets, with ticket status and technical decisions), `verificaciones/` (dated verification reports).
+- `docs/` — product and verification documents, in Spanish: `prd/` (PRD of the "registro de estado técnico" MVP), `backlog/` (user stories and tickets, with ticket status and technical decisions), `verificaciones/` (dated verification reports), `ci/` (pipeline design and the adversarial-review calibration draft).
+- `.github/workflows/route-surface.yml` — runs `routes:check` on `pull_request` to `main`: read-only token, no secrets, Node 24.8.0, actions pinned by SHA, `npm ci --ignore-scripts`, synthetic env. **Never run on GitHub yet** and **not a required check** (no branch protection or ruleset). A PR can change the checker, the reference and this workflow, so the control does not vouch for its own integrity. The AI review has no workflow, only a design: `docs/ci/diseno-pipeline.md`.
 - `openspec/` — OpenSpec (spec-driven changes, see **Claude Code harness**): `specs/` holds the current specs (today only `aislamiento-de-tests`), `changes/archive/` the completed changes (today `2026-10-25-aislar-base-de-tests`, i.e. ticket T-01). No change is active.
 
 Course practice repo (FlowSync, team task management). `s1/start` is the course starting point; `origin/s1/end` and `origin/s2/start` point to the same commit (the course's end of module 1 / start of module 2). The work in this clone is on local branches stacked on `s1/start`: `feat/auth-login` (auth frontend), `docs/clase-2-prd-backlog` (PRD, stories, tickets) and `chore/clase-3-tests-aislados` (OpenSpec integration and T-01).
