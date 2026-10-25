@@ -50,6 +50,16 @@ node ace test --groups="Signup"       # by group title
 node ace test --failed --watch
 ```
 
+**Tests run against their own database**, never the dev one (spec: `openspec/specs/aislamiento-de-tests/spec.md`; design and evidence: `openspec/changes/archive/2026-10-25-aislar-base-de-tests/`):
+
+- `config/database.ts` uses `tmp/db.test.sqlite3` when `app.inTest` (set by `bin/test.ts`), `tmp/db.sqlite3` otherwise.
+- `runnerHooks.setup` in `tests/bootstrap.ts` runs, in order: the safety check (`tests/support/test_database_guard.ts`), a single-run lock (`tmp/db.test.sqlite3.lock`, `tests/support/test_database_lock.ts`), deletion of the previous test database and its SQLite auxiliary files, and `testUtils.db().migrate()` (which does **not** regenerate `database/schema.ts`). Teardown rolls the migrations back, closes the connections and only then releases the lock; the test database file is kept. A lock left by a dead process is replaced automatically, inside a `tmp/db.test.sqlite3.lock.reap` directory that acts as a critical section.
+- **Abandoned `.lock.reap` — manual recovery, not automatic.** If a run dies inside that critical section, the directory stays and every later run aborts with `Another test run is replacing the abandoned lock…` without touching any database. To recover: (1) confirm that every test run has finished. `pgrep -af 'ace test'` showing nothing and `kill -0 <pid>` failing for the PID in `tmp/db.test.sqlite3.lock` are aids, **not proof**: runs started another way or by another user may not show up. **If you cannot confirm that all runs have finished, do not remove `.lock.reap`**; (2) `rmdir backend/tmp/db.test.sqlite3.lock.reap` (`rmdir` only removes an empty directory); (3) run the tests again — an abandoned `.lock` is then replaced automatically. Limitation: the `.reap` directory records no owner, so the code cannot tell a live replacement from a dead one and never removes it on its own.
+- The lock is covered by `tests/unit/test_database_lock_concurrency.spec.ts`: real processes, synchronized with an IPC start barrier and FIFO pause points (no sleeps), check that only one process acquires the lock and only one enters the abandoned-lock replacement at a time. Scope of that evidence: local Linux file system, six processes per scenario, coordinated (forced) interleavings, and two detected mutations (no critical section, non-atomic creation). It does not prove behavior under heavier load, on network file systems or on other operating systems.
+- The safety check aborts before any database is opened, deleted or migrated if the configured file is not exactly `tmp/db.test.sqlite3`, resolves to the dev database (path, symlink or same inode), is a symlink, or the connection is already open. A second concurrent run aborts on the lock without deleting anything.
+- Functional groups isolate each test with `group.each.setup(() => testUtils.db().withGlobalTransaction())`; HTTP requests made by the api client share that transaction.
+- To verify that a test run leaves the dev database untouched, stop every process connected to `tmp/db.sqlite3` (the dev server writes to it on its own) and compare its checksum, and any `-journal`/`-wal`/`-shm` files, before and after `node ace test`.
+
 HMR only covers `app/controllers/**` and `app/middleware/*` (`hotHook.boundaries`); edits anywhere else full-restart the server.
 
 ### frontend/
@@ -120,7 +130,7 @@ Routes (`start/routes.ts`, all under `/api/v1`): `auth/signup`, `auth/login` pub
 
 ## Current state
 
-Backend has the auth slice only: `User` model, 3 controllers, 2 migrations. **There are no tests** — `adonisrc.ts` declares `unit` and `functional` suites, but `tests/unit/` and `tests/functional/` don't exist; only `tests/bootstrap.ts` is present. Creating those directories is the first step for any test work.
+Backend has the auth slice only: `User` model, 3 controllers, 2 migrations. Tests exist only for the test infrastructure itself: `tests/unit/` covers the test-database safety check, bounded deletion and lock against disposable files, and `tests/functional/` checks the exclusive connection, a login + protected-route example and per-test isolation. There are no tests for product features yet.
 
 Frontend has the auth slice (signup, login, protected profile; **no logout, no Tuyau** — the API client is hand-written):
 
@@ -137,7 +147,7 @@ Observed backend contract (curl, synthetic users): signup/login success → **20
 
 ## Local setup
 
-- SQLite at `backend/tmp/db.sqlite3`; `tmp/*` is gitignored. `config/database.ts` has a single connection with no per-environment override, so tests hit the **same file** as the dev server — isolate writing tests with `testUtils.db()` hooks.
+- SQLite at `backend/tmp/db.sqlite3` for development and `backend/tmp/db.test.sqlite3` for tests; `tmp/*` is gitignored. The test file is selected by environment in `config/database.ts` and guarded in `tests/bootstrap.ts` (see **Commands › backend/**).
 - `backend/.env` is required and validated at boot by `start/env.ts` — `NODE_ENV`, `PORT`, `HOST`, `LOG_LEVEL`, `APP_KEY`, `APP_URL`, `SESSION_DRIVER` are all mandatory, so a missing one fails startup rather than degrading. Copy `.env.example` and run `node ace generate:key`.
 - `.env.test` overrides `SESSION_DRIVER=memory`.
 - CORS is `origin: true` in dev, empty allowlist in prod (`config/cors.ts`), with `credentials: true`.

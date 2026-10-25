@@ -18,10 +18,12 @@ Tres cosas distintas, que no hay que confundir:
   cobertura completa, enlaces). **No pasaron una revisión adversarial.**
 - **Decisiones técnicas pendientes.** Las de la sección 2 marcadas como
   abiertas o propuestas. Mientras sigan así, los tickets que bloquean **no
-  están listos para implementar**. Hoy ningún ticket está listo.
+  están listos para implementar**. **T-01 está terminado** (ver su ficha);
+  de los demás, hoy ninguno está listo.
 - **Funcionalidades no implementadas.** Ninguna de las funcionalidades de este
   backlog existe todavía en FlowSync: no hay migraciones, modelos, rutas,
-  pantallas ni tests de partes, afirmaciones, evidencias o pendientes.
+  pantallas ni tests de partes, afirmaciones, evidencias o pendientes. T-01 es
+  infraestructura de tests, no una funcionalidad del producto.
 
 La Definition of Done (sección 7) describe **cómo se cerrarán** los tickets.
 Ninguna de sus verificaciones se ejecutó.
@@ -66,6 +68,16 @@ en el código actual):
   en el frontend sería una decisión técnica futura, no un cambio de producto.
 - **DT-8. Cliente de la API.** Se mantiene el cliente `fetch` manual de
   `src/lib/api.ts`. **No se usa Tuyau.**
+- **DT-6. Base exclusiva para tests.** **Resuelta para el alcance de T-01**
+  (opción A): `config/database.ts` usa `tmp/db.test.sqlite3` cuando el entorno
+  es de tests, y `tests/bootstrap.ts` verifica la configuración antes de
+  abrir, borrar o migrar cualquier base, toma una marca de ejecución exclusiva
+  y migra sin regenerar `database/schema.ts`. Requisitos vigentes:
+  [`openspec/specs/aislamiento-de-tests/spec.md`](../../openspec/specs/aislamiento-de-tests/spec.md).
+  Diseño, tareas y evidencia:
+  [cambio archivado `2026-10-25-aislar-base-de-tests`](../../openspec/changes/archive/2026-10-25-aislar-base-de-tests/design.md).
+  La evidencia vale para Linux con sistema de archivos local; la recuperación
+  de un `.lock.reap` abandonado es manual.
 
 ### Abiertas o propuestas
 
@@ -119,17 +131,6 @@ Cada una indica qué tickets bloquea directamente y cuándo debe resolverse.
     vacía. La respuesta no incluye ningún campo de evaluación.
   - Bloquea: T-06 y T-08.
   - Resolver: junto con DT-2, antes de iniciar T-02.
-- **DT-6. Base exclusiva para tests.**
-  - Estado: dirección decidida, mecanismo abierto. Los tests usan una base
-    SQLite propia, distinta de `tmp/db.sqlite3`; un rollback o un truncate
-    sobre la base de desarrollo **no alcanza**. Hoy `config/database.ts`
-    apunta siempre a `tmp/db.sqlite3`, sin distinción por entorno.
-  - Abierto: cómo se elige el archivo en entorno de test (por ejemplo, una
-    condición según el entorno o una variable de entorno nueva), y cómo se
-    aplican las migraciones a esa base antes de los tests.
-  - Bloquea: T-01. Los tickets de backend (T-02 a T-06) no la usan
-    directamente, pero dependen de T-01.
-  - Resolver: al iniciar T-01, antes de escribir código.
 - **DT-9. Día actual del usuario para validar la fecha de comprobación.**
   - Estado: abierta. Propuesta para discutir: el frontend envía la zona horaria
     del navegador y el backend calcula «hoy» en esa zona; la fecha viaja como
@@ -187,7 +188,7 @@ Tamaños orientativos y relativos entre sí, sin horas:
 Respeta dependencias y pone P1 antes que P2:
 
 1. Paso de diseño (no es un ticket): resolver DT-1, DT-2, DT-4, DT-5 y DT-10.
-2. **T-01** (resolviendo DT-6 al inicio).
+2. **T-01** — terminado (DT-6 resuelta).
 3. **T-02**.
 4. **T-03** y, en paralelo, **T-07**.
 5. **T-04** y **T-05a**.
@@ -214,8 +215,19 @@ Respeta dependencias y pone P1 antes que P2:
 - **Exclusiones:** tests de las funcionalidades nuevas; tests unitarios;
   rollback o truncate sobre la base de desarrollo como mecanismo de
   aislamiento.
-- **Dependencias:** DT-6.
-- **Estado:** bloqueado por el mecanismo de DT-6.
+- **Dependencias:** DT-6 (resuelta).
+- **Estado:** **terminado.** Implementado y verificado mediante el cambio de
+  OpenSpec
+  [`2026-10-25-aislar-base-de-tests`](../../openspec/changes/archive/2026-10-25-aislar-base-de-tests/proposal.md)
+  (propuesta, diseño, tareas y evidencia), con sus requisitos vigentes en
+  [`openspec/specs/aislamiento-de-tests/spec.md`](../../openspec/specs/aislamiento-de-tests/spec.md).
+  Los criterios verificables de esta ficha se cumplieron (tareas 3.1, 4.1 y la
+  salvaguarda de las tareas 1.2–2.2 del cambio). **Diferencia con el alcance
+  original:** se agregaron tests unitarios, pero solo de la propia
+  infraestructura de tests (salvaguarda, borrado acotado y marca de
+  exclusividad), no de funcionalidades. **Límites:** la evidencia vale para
+  Linux con sistema de archivos local; la recuperación de un `.lock.reap`
+  abandonado es manual (procedimiento en `CLAUDE.md`).
 - **Prioridad:** P1 (sin T-01 no se pueden verificar los tickets de backend).
 - **Tamaño:** M.
   - Supuesto: alcanza con elegir otro archivo SQLite según el entorno.
@@ -243,7 +255,8 @@ Respeta dependencias y pone P1 antes que P2:
 - **Exclusiones:** eliminar partes; consultar una parte con su contenido
   (T-06); frontend.
 - **Dependencias:** T-01, DT-1, DT-2, DT-4, DT-10.
-- **Estado:** bloqueado por T-01, DT-1, DT-2, DT-4 y DT-10.
+- **Estado:** bloqueado por DT-1, DT-2, DT-4 y DT-10 (la dependencia T-01 ya
+  está cumplida).
 - **Prioridad:** P1 (crear, listar, validaciones, privacidad). Alcance P2:
   corregir una parte.
 - **Tamaño:** M.

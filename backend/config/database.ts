@@ -15,7 +15,11 @@ const dbConfig = defineConfig({
       client: 'better-sqlite3',
 
       connection: {
-        filename: app.tmpPath('db.sqlite3'),
+        /**
+         * Tests get their own file so they never touch development data.
+         * tests/bootstrap.ts verifies this before any database access.
+         */
+        filename: app.inTest ? app.tmpPath('db.test.sqlite3') : app.tmpPath('db.sqlite3'),
       },
 
       /**
