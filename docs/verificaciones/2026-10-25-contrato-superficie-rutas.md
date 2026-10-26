@@ -210,8 +210,10 @@ En las dos, los permisos efectivos del token fueron `Contents: read` y
   (`@poppinss/ts-exec`). No llegó a comprobar rutas.
 - **El check no es obligatorio:** no hay ruleset ni protección de rama en el
   fork, así que un resultado en rojo no bloquea el merge.
-- **Pendiente:** el revisor de IA no tiene workflow y su calibración no se
-  probó con ejecuciones reales.
+- **Pendiente:** el revisor de IA tiene un workflow preparado localmente y
+  desactivado (`.github/workflows/ai-review.yml`), que nunca se probó en
+  GitHub ni con un modelo. Su calibración tampoco. Ver
+  [`docs/ci/diseno-pipeline.md`](../ci/diseno-pipeline.md#revisión-adversarial-workflow-preparado-sin-activar).
 
 ## Límites
 

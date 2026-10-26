@@ -1,0 +1,293 @@
+# Advisory AI review of a pull request. Design and limits:
+# docs/ci/diseno-pipeline.md. Never run on GitHub or with a model yet.
+#
+# Off until the repository variable AI_REVIEW_ENABLED is 'true' and the
+# ANTHROPIC_API_KEY secret exists. A person starts each review by adding the
+# `ai-review` label to a non-draft PR from a branch of this repository.
+#
+# The model reads the diff of one exact head commit and the base branch: no
+# PR code is checked out or run, no PR dependencies are installed, and the
+# model has no write token. A separate job, without the model key, publishes
+# one comment per run. A skipped or failed review is never reported as "no
+# findings". The run is green only when the model's declared coverage names
+# every file of the diff and the PR head has not changed; that is declared
+# coverage, not proof of quality. The model never approves, blocks or merges.
+#
+# With pull_request the workflow file itself comes from the PR, so a PR can
+# change this file; only the prompt and the schema are read from the base.
+name: ai-review
+
+on:
+  pull_request:
+    types: [labeled]
+
+permissions: {}
+
+# Per PR and label: re-adding `ai-review` cancels the previous review of the
+# PR; adding or removing any other label neither cancels nor starts one.
+concurrency:
+  group: ai-review-${{ github.event.pull_request.number }}-${{ github.event.label.name }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: review
+    if: >-
+      vars.AI_REVIEW_ENABLED == 'true' &&
+      github.event.label.name == 'ai-review' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read # check out the base branch; compare API for the diff
+    outputs:
+      outcome: ${{ steps.prepare.outputs.outcome }}
+      diff_lines: ${{ steps.prepare.outputs.diff_lines }}
+      diff_files: ${{ steps.prepare.outputs.diff_files }}
+      control_files: ${{ steps.prepare.outputs.control_files }}
+      review: ${{ steps.result.outputs.review }}
+      structured_output: ${{ steps.result.outputs.structured_output }}
+    steps:
+      # The base, not the PR: CLAUDE.md, .claude/, the prompt and the schema
+      # all come from here. The change is only visible through the diff.
+      - name: Check out the base branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      # The diff is pinned to the head commit of the labeling event, so a
+      # push during the run cannot change what is reviewed.
+      # outcome: ready | too-large | long-lines | empty-diff | diff-error |
+      # config-missing | no-credentials. Without the model secret the model
+      # step is never invoked.
+      - name: Fetch the diff and check the limits
+        id: prepare
+        env:
+          # A boolean only: the secret's value never reaches this step.
+          HAS_MODEL_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MAX_DIFF_LINES: '500'
+          MAX_DIFF_BYTES: '100000'
+          MAX_LINE_CHARS: '1000'
+        run: |
+          set -euo pipefail
+          mkdir -p .ai-review
+          compare="repos/$REPO/compare/$BASE_SHA...$HEAD_SHA"
+          if ! gh api -H 'Accept: application/vnd.github.diff' "$compare" > .ai-review/pr.diff ||
+             ! gh api --paginate "$compare" --jq '.files[].filename' > .ai-review/files.txt; then
+            echo "outcome=diff-error" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          lines=$(wc -l < .ai-review/pr.diff)
+          bytes=$(wc -c < .ai-review/pr.diff)
+          longest=$(awk '{ if (length($0) > max) max = length($0) } END { print max + 0 }' .ai-review/pr.diff)
+          echo "diff_lines=$lines" >> "$GITHUB_OUTPUT"
+          echo "diff_files=$(jq -Rsc 'split("\n") | map(select(length > 0))' .ai-review/files.txt)" >> "$GITHUB_OUTPUT"
+          control=$(grep -E '^(\.github/|backend/scripts/check_route_surface\.ts$|backend/contracts/route_surface\.v1\.json$)' .ai-review/files.txt | paste -sd, - || true)
+          echo "control_files=$control" >> "$GITHUB_OUTPUT"
+
+          schema_file=.github/ai-review/schema.json
+          prompt_file=.github/ai-review/prompt.md
+          # claude_args is split with shell rules, so the schema goes inside single quotes.
+          if [ ! -s "$prompt_file" ] || ! schema=$(jq -ce . "$schema_file") || [[ "$schema" == *"'"* ]]; then
+            echo "outcome=config-missing" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$lines" -eq 0 ]; then
+            echo "outcome=empty-diff" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$lines" -gt "$MAX_DIFF_LINES" ] || [ "$bytes" -gt "$MAX_DIFF_BYTES" ]; then
+            echo "outcome=too-large" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$longest" -gt "$MAX_LINE_CHARS" ]; then
+            echo "outcome=long-lines" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$HAS_MODEL_KEY" != true ]; then
+            echo "outcome=no-credentials" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          delimiter="PROMPT_$(openssl rand -hex 16)"
+          {
+            echo "schema=$schema"
+            echo "prompt<<$delimiter"
+            cat "$prompt_file"
+            echo "$delimiter"
+            echo "outcome=ready"
+          } >> "$GITHUB_OUTPUT"
+
+      # Model authentication: anthropic_api_key. GitHub authentication: the
+      # job's read-only token, so the Claude GitHub App and id-token are not
+      # needed. --restricted removes the tools that run commands; the
+      # --settings flag makes the file tools refuse reads outside the working
+      # directory; write, web and MCP tools are denied. No --allowedTools:
+      # reads inside the working directory need no approval, and an unscoped
+      # allow rule could approve reads outside it. --max-budget-usd is a
+      # client-side estimate, not a hard cap. On any failure the action fails
+      # this step; the job goes on so that the next step can record it.
+      - name: Review (advisory)
+        id: review
+        if: steps.prepare.outputs.outcome == 'ready'
+        continue-on-error: true
+        uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13 # v1.0.262
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ github.token }}
+          prompt: ${{ steps.prepare.outputs.prompt }}
+          claude_args: >-
+            --model claude-sonnet-5-5
+            --max-turns 10
+            --max-budget-usd 1.00
+            --restricted
+            --settings '{"permissions":{"blockReadsOutsideWorkingDirectories":true}}'
+            --disallowedTools 'Edit,Write,NotebookEdit,WebSearch,WebFetch,mcp__*'
+            --json-schema '${{ steps.prepare.outputs.schema }}'
+
+      # review: success | failed | secret-in-output. The secret check only
+      # catches the two exact values below; see the design for its limits.
+      - name: Check the result
+        id: result
+        if: steps.prepare.outputs.outcome == 'ready'
+        env:
+          STEP_OUTCOME: ${{ steps.review.outcome }}
+          STRUCTURED: ${{ steps.review.outputs.structured_output }}
+          MODEL_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          JOB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "$STEP_OUTCOME" != success ] || [ -z "$STRUCTURED" ]; then
+            echo "review=failed" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          for value in "$MODEL_KEY" "$JOB_TOKEN"; do
+            if [ -n "$value" ] && [[ "$STRUCTURED" == *"$value"* ]]; then
+              echo "review=secret-in-output" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          delimiter="OUTPUT_$(openssl rand -hex 16)"
+          {
+            echo "review=success"
+            echo "structured_output<<$delimiter"
+            printf '%s\n' "$STRUCTURED"
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+
+  publish:
+    name: publish
+    needs: review
+    # !cancelled(): runs after a failed review, but not when a newer
+    # `ai-review` label cancelled this run, so a superseded run stays silent.
+    if: >-
+      !cancelled() &&
+      vars.AI_REVIEW_ENABLED == 'true' &&
+      github.event.label.name == 'ai-review' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write # read the current head; one comment on the PR
+    steps:
+      # Exit 0 only after publishing a result whose declared coverage names
+      # every file of the diff, for the head that is still current. Every
+      # other path publishes why there is no such result and exits 1.
+      - name: Publish one comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          REVIEWED_HEAD: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          LIMITS: 500 líneas, 100000 bytes y líneas de hasta 1000 caracteres
+          JOB_RESULT: ${{ needs.review.result }}
+          OUTCOME: ${{ needs.review.outputs.outcome }}
+          DIFF_LINES: ${{ needs.review.outputs.diff_lines }}
+          DIFF_FILES: ${{ needs.review.outputs.diff_files }}
+          CONTROL_FILES: ${{ needs.review.outputs.control_files }}
+          REVIEW: ${{ needs.review.outputs.review }}
+          STRUCTURED: ${{ needs.review.outputs.structured_output }}
+        run: |
+          set -euo pipefail
+          body=$(mktemp)
+          code=1
+          not_reviewed() {
+            printf '**No hay revisión: %s.** Esto no significa «sin hallazgos».\n' "$1" >> "$body"
+          }
+          current_head=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid || true)
+
+          printf '### Revisión automática (consultiva)\n\nHead del PR al poner la etiqueta: `%s`. Todo este comentario se refiere a ese commit.\n\n' "$REVIEWED_HEAD" >> "$body"
+          if [ -n "$CONTROL_FILES" ]; then
+            printf '**El PR modifica archivos de control** (%s): requieren revisión humana.\n\n' "$CONTROL_FILES" >> "$body"
+          fi
+
+          if [ "$OUTCOME" = too-large ]; then
+            not_reviewed "el diff ($DIFF_LINES líneas) supera el límite ($LIMITS); no se truncó. Dividí el PR o revisalo a mano"
+          elif [ "$OUTCOME" = long-lines ]; then
+            not_reviewed "el diff tiene líneas más largas que el límite ($LIMITS), que podrían no leerse completas; no se truncó"
+          elif [ "$OUTCOME" = empty-diff ]; then
+            not_reviewed "el diff está vacío"
+          elif [ "$OUTCOME" = diff-error ]; then
+            not_reviewed "no se pudo obtener el diff del commit"
+          elif [ "$OUTCOME" = config-missing ]; then
+            not_reviewed "la rama base no tiene instrucciones o esquema válidos en .github/ai-review/"
+          elif [ "$OUTCOME" = no-credentials ]; then
+            not_reviewed "falta el secreto ANTHROPIC_API_KEY, así que no se invocó al modelo"
+          elif [ "$JOB_RESULT" != success ] || [ "$OUTCOME" != ready ]; then
+            not_reviewed "el job de revisión terminó en «$JOB_RESULT»"
+          elif [ "$REVIEW" = secret-in-output ]; then
+            not_reviewed "la salida del modelo contenía la clave del modelo o el token del job y se descartó"
+          elif [ "$REVIEW" != success ] || [ -z "$STRUCTURED" ]; then
+            not_reviewed "la revisión no terminó. Puede ser autenticación, límite de turnos o de presupuesto, o un error de ejecución; el log del paso «Review» lo dice"
+          elif [ -z "$current_head" ]; then
+            not_reviewed "no se pudo comprobar el commit actual del PR, así que el resultado no se publica. Volvé a poner la etiqueta"
+          elif [ "$current_head" != "$REVIEWED_HEAD" ]; then
+            not_reviewed "el PR cambió: ahora está en «$current_head». El resultado de este commit no se publica para no atribuirlo al código actual. Volvé a poner la etiqueta"
+          elif ! rendered=$(jq -er --argjson diff_files "${DIFF_FILES:-null}" '
+              def item: "`\(.file):\(.line)` — \(.scenario) _Causa:_ \(.cause)";
+              def bullets: if length == 0 then "- nada" else map("- " + .) | join("\n") end;
+              if (.status | IN("complete", "incomplete") | not)
+                 or ([.reviewed_files, .not_reviewed, .not_verified, .findings, .minor_suggestions] | any(type != "array"))
+                 or ($diff_files | type != "array")
+              then error("unexpected output") else . end
+              # Declared coverage, not proof of quality: the model says
+              # complete, lists nothing as not reviewed, and names every file
+              # of the diff as reviewed.
+              | ($diff_files - .reviewed_files) as $missing
+              | (.status == "complete" and (.not_reviewed | length) == 0 and ($missing | length) == 0) as $covered
+              | (if $covered
+                 then "COVERED\nCobertura declarada: el modelo dice haber revisado todos los archivos del diff. Es lo que declara, no una prueba de calidad ni de revisión exhaustiva.\n\n"
+                 else "PARTIAL\n**Cobertura declarada incompleta.** Lo no revisado no tiene resultado: no es «sin hallazgos».\n\n" end)
+                + (if (.findings | length) == 0 and (.minor_suggestions | length) == 0
+                   then (if $covered then "El modelo no informó hallazgos sólidos.\n" else "El modelo no informó hallazgos en lo que declara haber revisado.\n" end)
+                   else
+                     (if (.findings | length) > 0
+                      then "**Hallazgos**\n\n" + (.findings | map("- **\(.severity)** " + item) | join("\n")) + "\n"
+                      else "" end)
+                     + (if (.minor_suggestions | length) > 0
+                        then "\n**Sugerencias menores**\n\n" + (.minor_suggestions[:3] | map("- " + item) | join("\n")) + "\n"
+                          + (if (.minor_suggestions | length) > 3 then "\nSe recibieron \(.minor_suggestions | length) sugerencias menores; se muestran 3 por el límite.\n" else "" end)
+                        else "" end)
+                   end)
+                + "\n**Declarado como revisado:**\n" + (.reviewed_files | bullets) + "\n"
+                + "\n**No revisado:**\n" + ((.not_reviewed + ($missing | map(. + " (del diff, no figura como revisado)"))) | bullets) + "\n"
+                + "\n**No comprobado sin ejecutar:**\n" + (.not_verified | bullets) + "\n"
+            ' <<< "$STRUCTURED"); then
+            not_reviewed "la salida del modelo no tiene el formato esperado"
+          else
+            if [ "$(head -n 1 <<< "$rendered")" = COVERED ]; then code=0; fi
+            tail -n +2 <<< "$rendered" >> "$body"
+          fi
+
+          printf '\n---\nNo aprueba ni bloquea: quien revisa el PR decide sobre cada punto. [Ejecución](%s)\n' "$RUN_URL" >> "$body"
+          # Keep model text from mentioning users: a zero-width space after every @.
+          sed -i 's/@/@\xE2\x80\x8B/g' "$body"
+          gh pr comment "$PR" --repo "$REPO" --body-file "$body"
+          exit "$code"

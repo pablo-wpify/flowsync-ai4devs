@@ -5,9 +5,10 @@
 > **se ejecutó en GitHub**, en el fork `pablo-wpify/flowsync-ai4devs`: un
 > camino positivo y uno negativo (ver
 > [Ejecuciones en GitHub](#ejecuciones-en-github-2026-10-26-utc)). **No es un
-> check obligatorio.** La revisión adversarial sigue siendo **solo diseño**:
-> no hay workflow ejecutable y la calibración no se probó con ejecuciones
-> reales.
+> check obligatorio.** La revisión adversarial tiene un **workflow preparado
+> localmente y desactivado** (`.github/workflows/ai-review.yml`): nunca se
+> probó en GitHub ni con un modelo, y la calibración tampoco (ver
+> [Revisión adversarial](#revisión-adversarial-workflow-preparado-sin-activar)).
 >
 > **Origen:** propuesta nuestra para el módulo 5. Se contrastó con el prework
 > y la guía escrita del módulo. Los videos y el PDF de prompts **siguen sin
@@ -35,8 +36,10 @@ No hay que confundirlos:
   - La documentación de GitHub dice que `pull-requests: write` permite, por
     ejemplo, agregar una etiqueta, y que `issues: write` permite comentar en
     un issue.
-  - Qué permiso exacto necesita un comentario general en un PR, y cuál uno
-    sobre una línea, está **[?]** pendiente de verificar.
+  - El ejemplo oficial de revisión de la acción comenta con
+    `pull-requests: write` **[D]**. Que alcance para un comentario general con
+    el `GITHUB_TOKEN` está **[?]** pendiente de verificar. El revisor
+    preparado no publica comentarios sobre líneas.
   - El job determinista no publica nada y no tiene permisos de escritura.
 
 ## El control no verifica su propia integridad
@@ -166,83 +169,328 @@ aprobación manual), borradores, una salida `2` en GitHub, el bloqueo de un
 merge, el timeout del job ni nada de la revisión adversarial. Son dos
 ejecuciones, una por camino.
 
-## Revisión adversarial: diseño (sin workflow)
+## Revisión adversarial: workflow preparado, sin activar
 
-### Disparo y alcance
+### Estado
 
-- **Evento:** `pull_request` con `types: [labeled]`. El job corre solo si
-  `github.event.label.name == 'ai-review'`. La etiqueta la pone una persona,
-  y cada nueva revisión requiere quitarla y volver a ponerla.
-- **Exclusiones:**
-  - **Borradores:** `github.event.pull_request.draft == false`.
-  - **Forks:** `github.event.pull_request.head.repo.full_name ==
-    github.repository`. En un fork tampoco habría secretos **[D]**.
-  - La acción solo responde a usuarios con permiso de escritura, y bloquea
-    los bots salvo que se los habilite con `allowed_bots` **[D]**. No usar
-    `allowed_non_write_users`.
-- **Alcance:** el diff del PR contra su base y los archivos que toca. **No
-  instala dependencias ni ejecuta código del PR:** solo lee.
+- **Archivos:** `.github/workflows/ai-review.yml`, más
+  `.github/ai-review/prompt.md` (instrucciones) y
+  `.github/ai-review/schema.json` (formato de la salida).
+- **Preparado localmente y desactivado.** Solo corre si la variable del
+  repositorio `AI_REVIEW_ENABLED` vale `true`. Además necesita el secreto
+  `ANTHROPIC_API_KEY` y la etiqueta `ai-review`. Ninguno de los tres existe.
+- **Nunca se probó en GitHub ni con un modelo.**
+- **Validado localmente [L]:**
+  - sin el secreto, el prechequeo deja `outcome=no-credentials` y el paso
+    del modelo no corre;
+  - el YAML se parsea;
+  - `bash -n` sobre los tres scripts;
+  - los pasos de preparación, de control del resultado y de publicación se
+    ejecutaron con un `gh` simulado, por los caminos de las tablas de abajo.
+
+  `actionlint`, `shellcheck` y `zizmor` no están instalados.
+- **Revisado** por `adversarial-reviewer` contra las fuentes de la acción. Sus
+  hallazgos se corrigieron en el workflow y en este documento.
+- **Acción fijada por SHA:** `anthropics/claude-code-action` v1.0.262 =
+  `925afb53776cf1a2b738c6bdbed37b4d4000ef13`, tomado con `git ls-remote`
+  **[L]**.
+- Marca extra en esta sección: **[C]** leído en el código fuente de la acción
+  en ese SHA; no está documentado y puede cambiar entre versiones.
+
+### Disparo, etiquetas y commit revisado
+
+- **Evento:** `pull_request` con `types: [labeled]`. Los dos jobs exigen:
+  - la variable `AI_REVIEW_ENABLED == 'true'`;
+  - la etiqueta `ai-review`;
+  - un PR que no sea borrador;
+  - la rama del PR en este mismo repositorio (`head.repo.full_name ==
+    github.repository`).
+- **Sin filtro de rama base:** la etiqueta la pone una persona. Ver
+  [Rama base para la primera prueba](#rama-base-para-la-primera-prueba).
+- **Casos en que no corre ni publica nada:**
+  - etiquetar un borrador: el job queda omitido;
+  - un PR con conflicto de merge: GitHub no ejecuta workflows de
+    `pull_request` hasta que se resuelva **[D]**.
+- La acción solo actúa para usuarios con permiso de escritura **[D]**. No se
+  usan `allowed_bots` ni `allowed_non_write_users`.
+
+| Situación | Qué pasa | Base |
+|---|---|---|
+| Se agrega otra etiqueta | Se crea una ejecución en el grupo `ai-review-<PR>-<etiqueta>`, distinto del de la revisión, y sus jobs se omiten por la condición. No cancela la revisión en curso ni publica nada | Concurrencia **[D]** y condiciones del workflow; sin probar en GitHub |
+| Se quita una etiqueta, cualquiera | No se crea ninguna ejecución: el evento `unlabeled` no está en `types` | **[D]** |
+| Se vuelve a poner `ai-review` durante una revisión | La ejecución nueva cancela la anterior, del mismo grupo. `publish` usa `!cancelled()`, así que la ejecución cancelada no publica; publica solo la nueva | **[D]** (`cancelled()` es verdadero si se canceló el workflow); sin probar |
+| Un push mientras corre la revisión | El diff ya se fijó al commit del evento: la API de compare con `base.sha...head.sha`, no el diff vivo del PR. Antes de publicar, `publish` consulta el head actual; si cambió, o no se puede consultar, **no publica el resultado** y lo dice | **[L]** con `gh` simulado |
+| Un push después de la revisión | No dispara nada. El comentario nombra el commit revisado | **[D]** y workflow |
+| Timeout del job `review` | `publish` debería correr e informar el resultado del job. Que un timeout de job no cuente como cancelación del workflow está **[?]** sin verificar | — |
+
+Queda una ventana mínima entre la consulta del head y la publicación del
+comentario. Si el head cambia justo ahí, el comentario igual nombra el commit
+al que corresponde.
+
+### Qué puede leer el modelo y qué credenciales recibe
+
+**Opciones usadas y lo que documentan:**
+
+| Opción | Qué documenta | Qué **no** documenta |
+|---|---|---|
+| `--restricted` (Claude Code ≥ v2.1.248) | Quita las herramientas que ejecutan comandos o código y `WebFetch`, salvo que se nombren en `--tools`. «Confina» las herramientas de archivos a los directorios de trabajo. Carga solo la configuración administrada y la de `--settings`. Rechaza `bypassPermissions` y las sesiones en la nube **[D]** | No dice cómo se hace cumplir el confinamiento. No promete aislar el entorno del proceso, los secretos, la red ni la lectura de `CLAUDE.md` |
+| `--settings '{"permissions":{"blockReadsOutsideWorkingDirectories":true}}'` (Claude Code ≥ v2.1.257) | `Read`, `Grep`, `Glob` y `LSP` rechazan rutas fuera de los directorios de trabajo en todos los modos de permisos. Siguen legibles los archivos que Claude Code necesita, como skills, reglas, agentes, comandos y el `CLAUDE.md` de `~/.claude/` **[D]** | No se probó en este contexto |
+| `--disallowedTools 'Edit,Write,NotebookEdit,WebSearch,WebFetch,mcp__*'` | Un nombre sin patrón quita la herramienta del contexto **[D]** | Que alcance a las MCP de la acción está **[?]**. Según el código, la acción solo agrega sus servidores MCP si `--allowedTools` los nombra, y aquí no los nombra **[C]** |
+| Sin `--allowedTools` | Las lecturas dentro de los directorios de trabajo no requieren aprobación **[D]**. Una regla `Read` sin ruta podría aprobar lecturas fuera **[I]** | — |
+| Sin `--tools` | Una lista cerrada podría dejar afuera `StructuredOutput`, la herramienta con la que Claude Code entrega la salida de `--json-schema` **[D]** | — |
+
+- **Versión:** la acción instala Claude Code v2.1.310 **[C]**, que cumple las
+  dos versiones mínimas.
+- `--restricted` no carga la configuración del proyecto ni la del usuario
+  **[D]**. Por lo tanto **no se aplica** el `permissions.deny: ["Read(.env)"]`
+  de `.claude/settings.json`, ni el input `settings` de la acción, que escribe
+  `~/.claude/settings.json` **[C]**. Por eso la regla va en `--settings`.
+
+**Qué podría leer, si todo funciona como está documentado:** solo el
+directorio de trabajo, más las excepciones de Claude Code.
+
+- Los archivos de la rama base en `base.sha`, incluido `.git/`. No hay
+  credenciales en `.git/config`, por `persist-credentials: false` **[D]**.
+- Los archivos de configuración que la acción restaura desde **la punta** de
+  la rama base (`git fetch origin <base.ref>`): `.claude/`, `.mcp.json`,
+  `CLAUDE.md` y otros **[C]**. La punta puede ser más nueva que `base.sha`.
+  Ese fetch no lleva credenciales; funciona porque el fork es público **[L]**.
+- `.claude-pr/`, la copia que la acción hace de esos archivos antes de
+  restaurarlos **[C]**. Aquí son los de la base, porque el checkout es de la
+  base.
+- `.ai-review/pr.diff` y `.ai-review/files.txt`.
+- Los archivos propios de Claude Code que la excepción deja legibles **[D]**.
+
+**Qué credenciales recibe el proceso de Claude Code** **[C]**: una copia del
+entorno del paso, menos las variables para pedir tokens OIDC y el volcado de
+inputs. Eso incluye:
+
+- `ANTHROPIC_API_KEY`, que el CLI necesita;
+- `GITHUB_TOKEN` y `GH_TOKEN` con el token del job, que solo tiene
+  `contents: read`;
+- el resto de las variables del runner que haya en ese paso. Cuáles son
+  exactamente está **[?]**.
+
+El modelo no tiene herramientas para leer variables de entorno ni para usar
+la red. El riesgo es que lea `/proc/self/environ` u otro archivo fuera del
+directorio de trabajo. La documentación dice que la configuración de arriba
+lo impide, pero **no está demostrado**: eso lo prueba una ejecución real.
 
 ### Permisos
 
-- Token del workflow: `contents: read` más el permiso de escritura para
-  comentar, que está **[?]** pendiente de verificar (ver «Tres permisos
-  distintos»). Más `id-token: write` solo si se usa la app de GitHub **[D]**.
-- Herramientas: lectura (`Read`, `Grep`, `Glob`), `gh pr diff` y
-  `gh pr view`, y las herramientas de comentario de la acción. Sin `Edit`,
-  sin `Write` y sin otros comandos de Bash. La acción ya deja Bash desactivado
-  por defecto **[D]**.
-- Las instrucciones son las del archivo de calibración, incluidas en el
-  `prompt`. Que la acción cargue `.claude/agents/adversarial-reviewer.md`
-  está **[?]** sin verificar.
+En el nivel del workflow, `permissions: {}`: cada job declara solo lo suyo.
+
+| Job | Permiso | Operación |
+|---|---|---|
+| `review` | `contents: read` | Checkout de la base y la API de compare para el diff y la lista de archivos, que exigen `Contents: read` **[D]**. Que la acción no necesite más con su `github_token` está **[?]** |
+| `publish` | `pull-requests: write` | Consultar el head actual (`gh pr view`) y un único `gh pr comment`. El ejemplo oficial `pr-review-comprehensive.yml` usa este permiso para comentar; `pr-review-filtered-paths.yml` declara `pull-requests: read` **[D]**. Que alcance para `gh pr comment` con el `GITHUB_TOKEN` está **[?]** |
+| — | `id-token: write` | **No se concede:** no se usa la app de GitHub ni la federación de identidad |
+
+- El job con el secreto del modelo nunca tiene permiso de escritura.
+- El job que escribe no tiene el secreto ni ejecuta la salida del modelo:
+  solo la convierte en texto con `jq`.
+
+### Autenticación: GitHub y modelo por separado
+
+**GitHub.** Se pasa `github_token: ${{ github.token }}`, el token del job,
+con `contents: read`.
+
+- Si se omite, la acción se autentica como la app de Claude para GitHub, que
+  requiere instalarla y conceder `id-token: write` **[D]**. Aquí no hace
+  falta, porque el modelo no publica.
+- Que el modo agente funcione con ese token está **[?]** sin probar.
+- El comentario lo publica `github-actions[bot]` desde el job `publish`.
+
+**Modelo, recomendado: clave de API** (`anthropic_api_key`, secreto
+`ANTHROPIC_API_KEY`).
+
+- Pago por uso, con una clave dedicada que se puede revocar.
+- La documentación la recomienda para un secreto que no dependa de una
+  persona **[D]**.
+- Si están las dos, la clave tiene precedencia sobre el token OAuth **[D]**:
+  configurar solo una.
+
+**Alternativa: token OAuth de suscripción** (`claude_code_oauth_token`,
+generado con `claude setup-token`).
+
+- Requiere un plan Pro, Max, Team o Enterprise, dura aproximadamente un año y
+  consume la suscripción de quien lo generó **[D]**.
+- Si los términos admiten usarlo en CI está **[?]** sin confirmar.
+- Cambiar a esta opción requiere editar el input en el workflow.
+
+**Más adelante:** la federación de identidad de cargas de trabajo evita un
+secreto estático. A cambio, necesita `id-token: write` y configuración en la
+consola de Anthropic **[D]**.
 
 ### Límites
 
-| Límite | Mecanismo | Tipo |
+| Límite | Valor | Mecanismo | Tipo |
+|---|---|---|---|
+| Tamaño del diff | 500 líneas del diff unificado (encabezados incluidos), 100 000 bytes y líneas de hasta 1000 caracteres | El paso de preparación mide; por encima de cualquiera no lanza el modelo y publica que no se revisó. **Nunca trunca** | **Efectivo [L]:** probado con 500 líneas (revisa), 501 (no), 120 kB en 300 líneas (no), una línea de 1001 caracteres (no) y de 1000 (revisa) |
+| Turnos | 10 | `--max-turns`, que la acción pasa como `maxTurns` al SDK | Según el código, una ejecución que no termina bien hace fallar el paso **[C]**. Sin probar |
+| Tiempo | 10 min el job `review`, 5 min el job `publish` | `timeout-minutes` | **Efectivo:** GitHub cancela el job **[D]** |
+| Gasto | Aproximadamente 1 USD por ejecución | `--max-budget-usd 1.00` | **Aproximado:** usa una estimación del cliente, que puede diferir de la factura y pasarse del tope **[D]**. Que la acción lo pase al CLI: **[C]**, sin probar |
+| Modelo | `claude-sonnet-5-5` | `--model` | Decide qué modelo se usa, no el gasto |
+| Salida | Hallazgos de gravedad alta y media, todos; sugerencias menores, como máximo 3 | Las instrucciones piden 3 como máximo; el paso de publicación muestra 3 y dice cuántas llegaron si son más. El esquema no usa `maxItems`, para que 4 sugerencias no anulen una revisión | **[L]** en el paso de publicación |
+
+### Salida: cobertura declarada y filtro de secretos
+
+**Cobertura declarada, no calidad.** La ejecución queda en verde solo si:
+
+- el modelo devuelve `status: complete`;
+- `not_reviewed` está vacío;
+- todos los archivos del diff figuran en `reviewed_files`;
+- el head del PR no cambió.
+
+Eso demuestra **cobertura declarada**: que el modelo **dice** haber revisado
+cada archivo. No demuestra que lo haya leído entero, que la revisión sea
+completa ni que sus hallazgos sean correctos. El comentario usa esa misma
+denominación.
+
+**Filtro de secretos: una defensa limitada.** El paso «Check the result»
+descarta la salida si contiene, **literalmente**, la clave del modelo o el
+token del job **[L]**. No detecta:
+
+- una clave transformada: codificada, partida, invertida o resumida;
+- otros secretos o variables del entorno del runner;
+- datos sensibles leídos de archivos.
+
+Tampoco se verificó qué hace GitHub con los outputs de un job que contienen
+secretos. **No es una garantía contra filtraciones.** Los controles
+principales son que el modelo no tenga cómo leer el entorno (sección
+anterior, sin demostrar) y que el comentario sea público solo después de
+pasar este filtro.
+
+Además, el comentario publica texto del modelo con un único filtro: el de
+las menciones (`@`). Enlaces, imágenes y HTML en Markdown pasan tal cual.
+
+### Fallos: nunca «sin hallazgos»
+
+- **Un fallo de la acción hace fallar su paso.** Si la ejecución no termina
+  bien (turnos, autenticación, presupuesto u otro error) o no entrega
+  `structured_output`, la acción lanza una excepción: el paso queda en rojo y
+  el output `conclusion` no llega a escribirse **[C]**.
+- **El paso tiene `continue-on-error: true`**, para que el job siga y el paso
+  «Check the result» registre `review=failed`.
+- **Solo la cobertura declarada completa, sobre el head vigente, deja la
+  ejecución en verde.** Todo lo demás publica el motivo y sale con `1`.
+
+| Situación | Comentario | Salida |
 |---|---|---|
-| Tiempo del job | `timeout-minutes: 15` | **Efectivo:** GitHub cancela el job **[D]** |
-| Turnos | `--max-turns 15` en `claude_args` | **Efectivo en el CLI**, que termina con error al llegar al límite **[D]**. Que la acción lo respete está **[?]** pendiente |
-| Tamaño del diff | Un paso previo que cuente las líneas del diff y no lance la revisión por encima de, por ejemplo, 1500 | **Efectivo** si se implementa así. El valor es a decidir |
-| Concurrencia | Un grupo por PR, con `cancel-in-progress: true` | **Efectivo** **[D]** |
-| Modelo | `--model sonnet` | **Efectivo** sobre qué modelo se usa, no sobre el gasto |
-| Gasto | `--max-budget-usd` | **Aproximado:** usa una estimación del cliente, que puede diferir de la factura y pasarse del tope **[D]**. Que la acción lo respete está **[?]** pendiente |
-| Gasto mensual y costo por revisión | Consola del proveedor, a posteriori | **Solo observación.** Si existen topes de gasto en la consola está **[?]** sin verificar |
+| Cobertura declarada completa, sin hallazgos | «Cobertura declarada…», más «El modelo no informó hallazgos sólidos» y lo declarado como revisado | `0` |
+| Cobertura declarada completa, con hallazgos | Hallazgos con gravedad, `archivo:línea`, escenario y causa; como máximo 3 sugerencias menores | `0` |
+| Cobertura declarada incompleta: así la declara el modelo, o hay archivos del diff que no figuran | «Cobertura declarada incompleta», más lo no revisado | `1` |
+| El head cambió, o no se pudo consultar | «No hay revisión: …»; no publica el resultado | `1` |
+| Diff por encima de los límites, con líneas demasiado largas, vacío o imposible de obtener | «No hay revisión: …», con el motivo | `1` |
+| Instrucciones o esquema ausentes en la base | «No hay revisión: …» | `1` |
+| Falta el secreto `ANTHROPIC_API_KEY` | «No hay revisión: falta el secreto…, así que no se invocó al modelo» | `1` |
+| Error de la acción: autenticación, turnos, presupuesto, ejecución o falta de `structured_output` | «No hay revisión: la revisión no terminó…», que remite al log | `1` |
+| La salida contiene la clave o el token, literalmente | «No hay revisión: … se descartó» | `1` |
+| Job `review` fallido o con timeout | «No hay revisión: el job terminó en …» | `1` |
+| Salida sin el formato esperado | «No hay revisión: …» | `1` |
 
-### Fallos
+Cada «No hay revisión» agrega: «Esto no significa “sin hallazgos”». Cada
+comentario empieza con el head del PR al poner la etiqueta (`head.sha` del
+evento) y aclara que todo el comentario se refiere a ese commit.
 
-- La revisión es **consultiva:** no será un check obligatorio. Que falle por
-  tiempo, turnos, presupuesto o autenticación no bloquea el avance.
-- Un fallo deja el run en rojo en la pestaña Actions. Quien lleva el PR
-  decide si reintentar, volviendo a poner la etiqueta.
-- **No hay reintento automático.**
-- Si el diff supera el tope de tamaño, se deja constancia de que no se revisó
-  y por qué. **Nunca se publica «sin hallazgos» por una revisión que no se
-  hizo.**
-
-### Dónde aparecen los hallazgos y quién decide
-
-- Un comentario general (`use_sticky_comment`), más comentarios sobre líneas
-  cuando haya un archivo y una línea concretos **[D]**.
-- Quien revisa el PR acepta, corrige o descarta cada hallazgo, con un motivo.
-  **El modelo no aprueba ni bloquea.**
+**Sin credencial del modelo, el modelo no se invoca:** el paso de
+preparación recibe solo un booleano, `secrets.ANTHROPIC_API_KEY != ''`, nunca
+el valor. Un secreto sin definir se evalúa como cadena vacía **[D]**. Si es
+`false`, el resultado es `no-credentials`, y el paso del modelo, que exige
+`outcome == 'ready'`, no corre **[L]**, probado con valores `false`, vacío y
+`true`. No depende de que la acción falle. **No hay reintento automático.** Quien revisa
+el PR acepta, corrige o descarta cada punto, con un motivo. **El modelo no
+aprueba ni bloquea.**
 
 ### Riesgos
 
-- **El contenido del PR no es confiable:** el diff, los comentarios y un
-  `CLAUDE.md` modificado pueden traer instrucciones. La acción limpia algunas
-  formas de contenido oculto, pero advierte que pueden aparecer otras **[D]**.
-  Mitigaciones: herramientas de solo lectura más comentarios, ninguna
-  ejecución de código, decisión humana.
-- **El secreto del modelo está en el runner:** por eso este job no ejecuta
-  código del PR.
-- **Cadena de suministro:** fijar `anthropics/claude-code-action` por SHA,
-  verificado desde su repositorio oficial cuando se escriba el workflow.
+- **El contenido del PR no es confiable.** Las instrucciones dicen que el diff
+  es dato, no instrucción. La acción limpia algunas formas de contenido
+  oculto, pero advierte que pueden aparecer otras **[D]**.
+- **Secretos en el proceso del modelo:** ver [Qué puede leer el modelo y qué
+  credenciales recibe](#qué-puede-leer-el-modelo-y-qué-credenciales-recibe)
+  y [Filtro de secretos](#salida-cobertura-declarada-y-filtro-de-secretos).
+- **El workflow es el del PR.** Con `pull_request`, un PR puede editar
+  `ai-review.yml` para leer otras instrucciones, quitar restricciones o hacer
+  otra cosa con el secreto. Que las instrucciones vengan de la base no protege
+  de eso. Es el mismo límite que el de `route-surface`, y solo lo cubren la
+  revisión humana y, más adelante, propietarios de código o un ruleset.
+- **Lo que instala la acción** **[C]**: `bun install --production` de sus
+  propias dependencias, y Claude Code v2.1.310 con
+  `curl -fsSL https://claude.ai/install.sh | bash`. La versión está fijada en
+  el código de la acción; el script se descarga sin fijar.
+- **Repositorio público:** los logs de Actions son públicos. No se activa
+  `show_full_output`, que puede exponer secretos en el log **[D]**.
+
+### Rama base para la primera prueba
+
+La rama base del PR de prueba tiene que contener `.github/ai-review/`. Si no,
+el workflow publica que faltan las instrucciones. `main` no lo tiene, y no
+hace falta hacer merge del PR #1 para eso: el workflow no filtra la rama base.
+
+**Recomendada: usar `publicacion/repaso-clases-1-a-5` como base.**
+
+1. Commit y push de este cambio a esa rama, cuando se decida. El PR #1 lo
+   incorpora, como el resto del trabajo acumulado; no se hace merge a `main`.
+2. Una rama temporal desde ese commit, con un defecto pequeño y conocido (por
+   ejemplo, la mutación de `auth` del camino negativo de `route-surface`).
+3. Un PR de esa rama hacia `publicacion/repaso-clases-1-a-5`, no hacia `main`.
+   Su diff es solo la mutación, y las instrucciones salen de un commit que
+   revisó Pablo.
+4. Una sola etiqueta. Después, cerrar el PR sin merge y borrar la rama.
+
+**Alternativa, sin tocar el PR #1:** una rama base temporal desde `main`, con
+un único commit que agregue solo `.github/ai-review/` y el workflow. La rama
+de prueba sale de ella. Su desventaja: la base no tiene el resto del trabajo,
+y hay que borrarla al terminar.
+
+**En las dos, la confianza en la base es por acceso, no por una regla:** sin
+protección de rama, cualquiera con permiso de escritura puede cambiar la
+rama base. Y la acción toma la configuración de Claude de la **punta** de esa
+rama, no de `base.sha` **[C]**.
+
+### Prueba única propuesta
+
+Una sola ejecución inicial, con un límite aproximado de **1 USD**
+(`--max-budget-usd 1.00`, una estimación del cliente que puede pasarse).
+**Pendiente de autorización:** no se ejecuta ningún modelo hasta entonces.
+No se estima el costo con precios: se registra el que informe la consola
+después de la prueba.
+
+**Antes, una prueba sin credenciales,** con la variable activada y **sin**
+crear el secreto. El prechequeo impide invocar la acción del modelo. La
+etiqueta debería publicar «No hay revisión: falta el secreto
+ANTHROPIC_API_KEY, así que no se invocó al modelo». Eso prueba:
+
+- el disparo y la condición de etiqueta;
+- el checkout de la base;
+- el diff fijado por la API de compare con `contents: read`;
+- los límites;
+- `gh pr view` y `gh pr comment` con `pull-requests: write`;
+- el head en el comentario.
+
+En el log, el paso «Review (advisory)» tiene que figurar como omitido.
+
+### Lo que requiere una prueba real
+
+- Que GitHub acepte el workflow, y las condiciones de disparo, etiquetas y
+  concurrencia.
+- Que la acción funcione con un token de solo `contents: read` y sin la app.
+- Que `--restricted`, `--settings`, `--disallowedTools`, `--json-schema` y
+  `--max-budget-usd` lleguen al CLI, y que juntos no impidan la salida
+  estructurada.
+- Que la lectura fuera del directorio de trabajo, por ejemplo de
+  `/proc/self/environ`, se rechace de verdad.
+- Que `pull-requests: write` alcance para `gh pr view` y `gh pr comment`.
+- `--max-turns`, el comportamiento ante un timeout y el costo real.
+- La calibración: los casos de
+  [`revision-adversarial-calibracion.md`](revision-adversarial-calibracion.md).
 
 ## Validado localmente, observado en GitHub y pendiente
 
 | Validado localmente | Observado en GitHub (fork, 2026-10-26) | Pendiente |
 |---|---|---|
-| Instalación limpia desde el lockfile versionado; `routes:check` sin `.env`, sobre una copia hecha con `git archive` (solo archivos versionados, incluidos `.adonisjs/` y `tmp/.gitkeep`); la falla con salida `2`; SHA y tags de las acciones en sus repositorios oficiales; el YAML se parsea como YAML. **No** se validó con un validador de workflows: `actionlint`, `zizmor` y `check-jsonschema` no están instalados | GitHub acepta el workflow; el disparo por `pull_request` hacia `main` desde una rama del mismo repo; checkout del commit de merge; permisos efectivos `Contents: read` y `Metadata: read`; `setup-node` instalando 24.8.0 (npm 11.6.0); `npm ci` desde el lockfile; salida `0` con la superficie intacta y `1` con diferencias al quitar `auth`; job de 15 a 16 s | Comportamiento con PRs desde otro fork y con borradores; la aprobación manual que puede exigirse para PRs de colaboradores externos nuevos; la salida `2` en GitHub; bloqueo del merge con un check obligatorio (no hay ruleset); **todo el revisor de IA**: workflow, autenticación de la acción de Claude, qué permiso necesita cada tipo de comentario, si la acción respeta `--max-turns` y `--max-budget-usd`, costo real y **calibración efectiva** con ejecuciones reales |
+| Instalación limpia desde el lockfile versionado; `routes:check` sin `.env`, sobre una copia hecha con `git archive` (solo archivos versionados, incluidos `.adonisjs/` y `tmp/.gitkeep`); la falla con salida `2`; SHA y tags de las acciones en sus repositorios oficiales; el YAML se parsea como YAML. **No** se validó con un validador de workflows: `actionlint`, `zizmor` y `check-jsonschema` no están instalados | GitHub acepta el workflow; el disparo por `pull_request` hacia `main` desde una rama del mismo repo; checkout del commit de merge; permisos efectivos `Contents: read` y `Metadata: read`; `setup-node` instalando 24.8.0 (npm 11.6.0); `npm ci` desde el lockfile; salida `0` con la superficie intacta y `1` con diferencias al quitar `auth`; job de 15 a 16 s | Comportamiento con PRs desde otro fork y con borradores; la aprobación manual que puede exigirse para PRs de colaboradores externos nuevos; la salida `2` en GitHub; bloqueo del merge con un check obligatorio (no hay ruleset); **todo el revisor de IA en GitHub y con un modelo**: ver [Lo que requiere una prueba real](#lo-que-requiere-una-prueba-real). Del revisor, solo los scripts de preparación, control del resultado y publicación se probaron localmente, con un `gh` simulado |
 
 ## Decisiones externas pendientes
 
@@ -251,15 +499,26 @@ ejecuciones, una por camino.
    del curso u otro donde lo seas? El job determinista ya corrió en el fork
    `pablo-wpify/flowsync-ai4devs`, sin secretos. El revisor de IA sigue sin
    lugar decidido.
-2. **Autenticación del modelo:** clave de API (pago por uso) o token OAuth de
-   suscripción.
-3. **Identidad de GitHub de la acción:** la app de Claude (instalación por un
-   admin) o el `GITHUB_TOKEN`.
+2. **Autenticación del modelo:** recomendada, una clave de API dedicada
+   (secreto `ANTHROPIC_API_KEY`). Alternativa: un token OAuth de suscripción,
+   que requiere cambiar el input. Ver
+   [Autenticación](#autenticación-github-y-modelo-por-separado).
+3. **Identidad de GitHub de la acción:** el workflow preparado usa el
+   `GITHUB_TOKEN` del job, sin la app de Claude. Se puede reconsiderar si la
+   prueba muestra que la acción no funciona con un token de solo lectura.
 4. **Protección:** si `route-surface` pasa a ser un check obligatorio, con qué
    ruleset, si sin excepción para admins, y cómo se protegen el checker, la
    referencia y el workflow (por ejemplo, con propietarios de código).
-5. **Valores de los límites:** tope del diff, turnos, tiempo y presupuesto.
+5. **Valores de los límites:** propuestos 500 líneas, 100 000 bytes y líneas
+   de hasta 1000 caracteres de diff, 10 turnos, 10 minutos y un límite
+   aproximado de 1 USD por ejecución. **Una sola ejecución inicial, pendiente
+   de autorización.** Si conviene además un tope de gasto en la consola de
+   Anthropic está **[?]** sin verificar.
 6. **Lockfiles locales:** quedan fuera; CI usa los versionados.
+7. **Activación del revisor:** crear la etiqueta `ai-review`, el secreto y la
+   variable `AI_REVIEW_ENABLED=true`, y elegir la rama base de la prueba, que
+   debe contener `.github/ai-review/` (ver
+   [Rama base para la primera prueba](#rama-base-para-la-primera-prueba)).
 
 ## Fuentes
 
@@ -279,7 +538,22 @@ Consultadas el 2026-10-25:
   <https://github.com/actions/checkout/blob/3d3c42e5aac5ba805825da76410c181273ba90b1/README.md>
 - `actions/setup-node` v7.1.0:
   <https://github.com/actions/setup-node/blob/949feb2413d6458794dcd2491c4babbbce0c15c1/README.md>
-- `anthropics/claude-code-action`:
+- `anthropics/claude-code-action` v1.0.262, leído en el SHA fijado
+  (consultado el 2026-10-26):
+  <https://github.com/anthropics/claude-code-action/blob/925afb53776cf1a2b738c6bdbed37b4d4000ef13/action.yml>,
+  <https://github.com/anthropics/claude-code-action/blob/925afb53776cf1a2b738c6bdbed37b4d4000ef13/docs/security.md>,
+  <https://github.com/anthropics/claude-code-action/blob/925afb53776cf1a2b738c6bdbed37b4d4000ef13/docs/usage.md>,
+  <https://github.com/anthropics/claude-code-action/blob/925afb53776cf1a2b738c6bdbed37b4d4000ef13/docs/faq.md>,
+  <https://github.com/anthropics/claude-code-action/blob/925afb53776cf1a2b738c6bdbed37b4d4000ef13/examples/pr-review-comprehensive.yml>;
+  código **[C]**:
+  <https://github.com/anthropics/claude-code-action/blob/925afb53776cf1a2b738c6bdbed37b4d4000ef13/src/entrypoints/run.ts>,
+  <https://github.com/anthropics/claude-code-action/blob/925afb53776cf1a2b738c6bdbed37b4d4000ef13/base-action/src/run-claude-sdk.ts>,
+  <https://github.com/anthropics/claude-code-action/blob/925afb53776cf1a2b738c6bdbed37b4d4000ef13/base-action/src/parse-sdk-options.ts>
+- Claude Code, GitHub Actions, autenticación y salida estructurada:
+  <https://code.claude.com/docs/en/github-actions>,
+  <https://code.claude.com/docs/en/authentication>,
+  <https://code.claude.com/docs/en/agent-sdk/structured-outputs>
+- `anthropics/claude-code-action`, versión anterior consultada el 2026-10-25:
   <https://github.com/anthropics/claude-code-action>,
   <https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md>,
   <https://github.com/anthropics/claude-code-action/blob/main/docs/security.md>,
