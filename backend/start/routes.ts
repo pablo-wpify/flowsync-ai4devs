@@ -32,6 +32,5 @@ router
       })
       .prefix('account')
       .as('profile')
-      .use(middleware.auth())
   })
   .prefix('/api/v1')
