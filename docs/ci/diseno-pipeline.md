@@ -1,16 +1,22 @@
 # Diseño del pipeline: superficie de rutas y revisión adversarial
 
-> **Fecha:** 2026-10-25 · **Estado:** el workflow determinista está escrito
-> (`.github/workflows/route-surface.yml`) pero **nunca se ejecutó en GitHub**.
-> La revisión adversarial es **solo diseño**: no hay workflow ejecutable.
+> **Fecha:** 2026-10-25, ejecuciones en GitHub del 2026-10-26 (UTC) ·
+> **Estado:** el workflow determinista (`.github/workflows/route-surface.yml`)
+> **se ejecutó en GitHub**, en el fork `pablo-wpify/flowsync-ai4devs`: un
+> camino positivo y uno negativo (ver
+> [Ejecuciones en GitHub](#ejecuciones-en-github-2026-10-26-utc)). **No es un
+> check obligatorio.** La revisión adversarial sigue siendo **solo diseño**:
+> no hay workflow ejecutable y la calibración no se probó con ejecuciones
+> reales.
 >
 > **Origen:** propuesta nuestra para el módulo 5. Se contrastó con el prework
 > y la guía escrita del módulo. Los videos y el PDF de prompts **siguen sin
 > revisar**.
 
-Marcas: **[L]** comprobado localmente · **[D]** documentado (ver
-[Fuentes](#fuentes)) · **[I]** inferido de la documentación · **[?]**
-pendiente de verificar en GitHub.
+Marcas: **[L]** comprobado localmente · **[G]** observado en el log de una
+ejecución real en GitHub · **[D]** documentado (ver [Fuentes](#fuentes)) ·
+**[I]** inferido de la documentación · **[?]** pendiente de verificar en
+GitHub.
 
 ## Tres permisos distintos
 
@@ -38,8 +44,8 @@ No hay que confundirlos:
 Un PR puede modificar **el checker**
 (`backend/scripts/check_route_surface.ts`), **la referencia**
 (`backend/contracts/route_surface.v1.json`) y **el propio workflow**. Con
-`pull_request`, el workflow corre sobre el commit de merge del PR **[D]**, así
-que su definición también es la del PR **[I]**. Por eso:
+`pull_request`, el workflow corre sobre el commit de merge del PR **[D]**
+**[G]**, así que su definición también es la del PR **[I]**. Por eso:
 
 - Un resultado verde **no garantiza la integridad del checker ni de la
   referencia**: solo dice que el código del PR coincide con la referencia
@@ -58,9 +64,9 @@ que su definición también es la del PR **[I]**. Por eso:
 | Aspecto | Decisión |
 |---|---|
 | Evento | `pull_request` hacia `main`, con los tipos por defecto (`opened`, `synchronize`, `reopened`) **[D]**. **Sin filtro de rutas:** la superficie depende de muchos archivos, y un check obligatorio en estado `skipped` cuenta como aprobado **[D]** |
-| Token | `permissions: contents: read`. Checkout con `persist-credentials: false` |
+| Token | `permissions: contents: read`. Checkout con `persist-credentials: false`. Permisos efectivos según el log: `Contents: read` y `Metadata: read` **[G]** |
 | Secretos | Ninguno. En PRs de forks no se pasan secretos y el token es de solo lectura **[D]** |
-| Node | `24.8.0`, la versión con la que se verificó **[L]** |
+| Node | `24.8.0`, la versión con la que se verificó **[L]**. `setup-node` la descargó e instaló: `node: v24.8.0`, `npm: 11.6.0` **[G]** |
 | Acciones | Fijadas por SHA completo, tomado con `git ls-remote` de `github.com/actions/*` **[L]**: `actions/checkout` v7.0.1 = `3d3c42e5aac5ba805825da76410c181273ba90b1`, `actions/setup-node` v7.1.0 = `949feb2413d6458794dcd2491c4babbbce0c15c1` |
 | Caché | Desactivada (`package-manager-cache: false`): menos superficie de ataque y una instalación que no depende de corridas anteriores |
 | Instalación | `npm ci --ignore-scripts` desde el lockfile versionado. Evita **solo los scripts de instalación de las dependencias** (los de `@swc/core` y `better-sqlite3`, y la descarga de binarios). El control no los necesita **[L]** |
@@ -70,7 +76,7 @@ que su definición también es la del PR **[I]**. Por eso:
 | Concurrencia | Un grupo por número de PR, con `cancel-in-progress: true`. Solo es correcto mientras `pull_request` sea el único evento: con `push` o `workflow_dispatch` el número quedaría vacío y todas esas ejecuciones compartirían un grupo |
 | Fallos | Cualquier salida distinta de 0 hace fallar el job, y **en GitHub el `1` y el `2` se ven igual: un paso en rojo**. Para distinguirlos hay que leer el log: `Route surface differs …` (diferencias) o `Route surface check failed: …` (generación o formato). Un `1` sin esa primera línea viene de Node, por ejemplo porque no pudo cargar el script |
 | `NODE_ENV` | `development` en todo el job. Con `production`, `npm ci` omitiría las devDependencies, que el script necesita |
-| Bloqueo | **Ninguno todavía.** No es un check obligatorio: no hay protección de rama ni ruleset. Que el workflow falle no bloquea el merge por sí solo |
+| Bloqueo | **Ninguno todavía.** No es un check obligatorio: no hay protección de rama ni ruleset. En el fork, la API informó 0 rulesets, 0 reglas sobre `main` y `main` sin protección (2026-10-26). Que el workflow falle no bloquea el merge por sí solo. No se intentó un merge con el check en rojo |
 
 ### Verificación local (2026-10-25)
 
@@ -93,7 +99,72 @@ En una copia descartable de `backend/`, tomada del commit `b660617`:
 
 Esto **no** prueba el runner de GitHub (`ubuntu-24.04`), la descarga de Node
 por `setup-node`, ni los disparadores y permisos reales. El YAML se validó
-solo como YAML (`yaml.safe_load`), no con un validador de workflows.
+solo como YAML (`yaml.safe_load`), no con un validador de workflows. Esa
+parte se observó después en GitHub (sección siguiente).
+
+### Ejecuciones en GitHub (2026-10-26 UTC)
+
+En el fork `pablo-wpify/flowsync-ai4devs`, con PRs desde ramas **del mismo
+repositorio** hacia `main`. El workflow es el de `ca44349`, sin cambios en
+ninguna de las dos ejecuciones.
+
+**Camino positivo:** PR [#1](https://github.com/pablo-wpify/flowsync-ai4devs/pull/1)
+(`publicacion/repaso-clases-1-a-5` → `main`, head
+`ca44349cde87f203c9ecf118d2fea0283d7c72d1`). Ejecución
+[40248596507](https://github.com/pablo-wpify/flowsync-ai4devs/actions/runs/40248596507)
+(job [121335356122](https://github.com/pablo-wpify/flowsync-ai4devs/actions/runs/40248596507/job/121335356122)),
+conclusión `success`.
+
+- Disparada por `pull_request`. El checkout fue del commit de merge `7c9aa0b`
+  (`Merge ca44349… into a699566…`), con `persist-credentials: false`.
+- Permisos efectivos del `GITHUB_TOKEN`, según el log: `Contents: read` y
+  `Metadata: read`. El workflow solo declara `contents: read`.
+- Acciones descargadas por los SHA fijados. Runner `ubuntu-24.04`, imagen
+  `20261012.334.1`.
+- `setup-node` descargó Node 24.8.0: `node: v24.8.0`, `npm: 11.6.0`.
+- `npm ci --ignore-scripts --no-audit --no-fund` desde el lockfile
+  versionado: `added 557 packages in 4s`, con un aviso de paquete obsoleto
+  (`prebuild-install`).
+- `Route surface matches contracts/route_surface.v1.json`. Job de unos 16 s.
+
+**Camino negativo:** PR [#2](https://github.com/pablo-wpify/flowsync-ai4devs/pull/2),
+desde una rama temporal creada a partir de `ca44349`. Ejecución
+[40248947378](https://github.com/pablo-wpify/flowsync-ai4devs/actions/runs/40248947378)
+(job [121336401522](https://github.com/pablo-wpify/flowsync-ai4devs/actions/runs/40248947378/job/121336401522)),
+conclusión `failure`.
+
+- **Mutación:** un solo commit,
+  `107918387234fa008d9454605935c8d4bec3649c`, que borra únicamente
+  `.use(middleware.auth())` del grupo `account` en `backend/start/routes.ts`.
+  `git diff --stat ca44349 1079183` muestra solo ese archivo, con una línea
+  borrada: **la referencia, el checker y el workflow no cambiaron**. El autor
+  del commit figura con el correo noreply de la cuenta; el commit **no está
+  firmado**.
+- **Base `main`:** el workflow solo se dispara con PRs hacia `main` y no se
+  cambió el filtro para la prueba. Por eso el diff del PR #2 también incluía
+  el trabajo acumulado de la rama de publicación.
+- Checkout del commit de merge `0f10c3f`, mismos permisos efectivos,
+  `node: v24.8.0`, `npm: 11.6.0`, `added 557 packages in 3s`.
+- `Check the route surface` terminó con `exit code 1`, con
+  `Route surface differs from contracts/route_surface.v1.json`. En `[public]`
+  y en `[internal]`, `GET /api/v1/account/profile` y
+  `POST /api/v1/account/logout` pasan de `middleware=[auth]` (en `[internal]`,
+  `auth:#middleware/auth_middleware.handle`) a `middleware=[]`. Es una falla
+  por diferencias, no de instalación ni de generación.
+- **Cierre:** el PR #2 se cerró sin merge, con un comentario que resume el
+  resultado. La rama temporal se borró en local y en el remoto: la API
+  responde 404. El PR #1 sigue abierto, con head `ca44349`.
+- **Ejecución local previa, que no cuenta como prueba:** antes de subir la
+  rama, `npm run routes:check` en el clone de publicación salió con `2`,
+  porque ese clone no tenía dependencias instaladas (falta
+  `@poppinss/ts-exec`). No llegó a comprobar rutas. La evidencia local de
+  esta mutación es la de una copia descartable, en el
+  [informe del control de rutas](../verificaciones/2026-10-25-contrato-superficie-rutas.md).
+
+**Qué no prueban estas dos ejecuciones:** PRs desde otro fork (secretos y
+aprobación manual), borradores, una salida `2` en GitHub, el bloqueo de un
+merge, el timeout del job ni nada de la revisión adversarial. Son dos
+ejecuciones, una por camino.
 
 ## Revisión adversarial: diseño (sin workflow)
 
@@ -167,17 +238,19 @@ solo como YAML (`yaml.safe_load`), no con un validador de workflows.
 - **Cadena de suministro:** fijar `anthropics/claude-code-action` por SHA,
   verificado desde su repositorio oficial cuando se escriba el workflow.
 
-## Validado localmente y pendiente en GitHub
+## Validado localmente, observado en GitHub y pendiente
 
-| Validado localmente | Requiere una ejecución real en GitHub |
-|---|---|
-| Instalación limpia desde el lockfile versionado; `routes:check` sin `.env`, sobre una copia hecha con `git archive` (solo archivos versionados, incluidos `.adonisjs/` y `tmp/.gitkeep`); la falla con salida `2`; SHA y tags de las acciones en sus repositorios oficiales; el YAML se parsea como YAML. **No** se validó con un validador de workflows: `actionlint`, `zizmor` y `check-jsonschema` no están instalados | Que GitHub acepte el workflow; disparadores y condiciones; permisos efectivos del token; comportamiento con forks y borradores; la aprobación manual que puede exigirse para PRs de colaboradores externos nuevos; `setup-node` instalando 24.8.0; tiempo real del job; autenticación de la acción de Claude; qué permiso necesita cada tipo de comentario; si la acción respeta `--max-turns` y `--max-budget-usd`; costo real; bloqueo del merge con un check obligatorio |
+| Validado localmente | Observado en GitHub (fork, 2026-10-26) | Pendiente |
+|---|---|---|
+| Instalación limpia desde el lockfile versionado; `routes:check` sin `.env`, sobre una copia hecha con `git archive` (solo archivos versionados, incluidos `.adonisjs/` y `tmp/.gitkeep`); la falla con salida `2`; SHA y tags de las acciones en sus repositorios oficiales; el YAML se parsea como YAML. **No** se validó con un validador de workflows: `actionlint`, `zizmor` y `check-jsonschema` no están instalados | GitHub acepta el workflow; el disparo por `pull_request` hacia `main` desde una rama del mismo repo; checkout del commit de merge; permisos efectivos `Contents: read` y `Metadata: read`; `setup-node` instalando 24.8.0 (npm 11.6.0); `npm ci` desde el lockfile; salida `0` con la superficie intacta y `1` con diferencias al quitar `auth`; job de 15 a 16 s | Comportamiento con PRs desde otro fork y con borradores; la aprobación manual que puede exigirse para PRs de colaboradores externos nuevos; la salida `2` en GitHub; bloqueo del merge con un check obligatorio (no hay ruleset); **todo el revisor de IA**: workflow, autenticación de la acción de Claude, qué permiso necesita cada tipo de comentario, si la acción respeta `--max-turns` y `--max-budget-usd`, costo real y **calibración efectiva** con ejecuciones reales |
 
 ## Decisiones externas pendientes
 
 1. **Dónde correr:** `origin` es `LIDR-academy/flowsync-ai4devs`, el repo del
    curso. Instalar la app y cargar secretos requiere ser admin. ¿Es el repo
-   del curso u otro donde lo seas?
+   del curso u otro donde lo seas? El job determinista ya corrió en el fork
+   `pablo-wpify/flowsync-ai4devs`, sin secretos. El revisor de IA sigue sin
+   lugar decidido.
 2. **Autenticación del modelo:** clave de API (pago por uso) o token OAuth de
    suscripción.
 3. **Identidad de GitHub de la acción:** la app de Claude (instalación por un

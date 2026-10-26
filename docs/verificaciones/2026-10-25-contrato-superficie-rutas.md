@@ -4,7 +4,9 @@
 > (sin commit) · AdonisJS core 7.3.5 · Node 24.8.0 · Linux.
 >
 > **Naturaleza de este informe:** observaciones de ejecuciones manuales. Las
-> copias descartables, las trazas y las salidas se borraron al terminar.
+> copias descartables, las trazas y las salidas se borraron al terminar. La
+> sección [Ejecuciones en GitHub](#ejecuciones-en-github-2026-10-26-utc) es
+> distinta: se apoya en los logs de GitHub Actions, enlazados ahí.
 
 ## Qué es y qué compara
 
@@ -178,6 +180,39 @@ copió. No quedaron candidatos en `/tmp`.
 
 `eslint`, `prettier --check` y `tsc --noEmit` pasan con el script final.
 
+## Ejecuciones en GitHub (2026-10-26 UTC)
+
+El workflow `route-surface` corrió en el fork `pablo-wpify/flowsync-ai4devs`,
+con PRs desde ramas del mismo repositorio hacia `main`. Detalle de permisos,
+runner y pasos en
+[`docs/ci/diseno-pipeline.md`](../ci/diseno-pipeline.md#ejecuciones-en-github-2026-10-26-utc).
+
+| Camino | PR | Ejecución | Commit del PR | Resultado |
+|---|---|---|---|---|
+| Positivo | [#1](https://github.com/pablo-wpify/flowsync-ai4devs/pull/1) | [40248596507](https://github.com/pablo-wpify/flowsync-ai4devs/actions/runs/40248596507) | `ca44349cde87f203c9ecf118d2fea0283d7c72d1` | `success`. Node 24.8.0 y npm 11.6.0 vía `setup-node`; `npm ci --ignore-scripts` desde el lockfile (`added 557 packages`); `Route surface matches contracts/route_surface.v1.json` |
+| Negativo | [#2](https://github.com/pablo-wpify/flowsync-ai4devs/pull/2) | [40248947378](https://github.com/pablo-wpify/flowsync-ai4devs/actions/runs/40248947378) | `107918387234fa008d9454605935c8d4bec3649c` | `failure`, `exit code 1`: `Route surface differs …`, con `profile` y `logout` pasando de `middleware=[auth]` a `middleware=[]` en `[public]` y en `[internal]` |
+
+En las dos, los permisos efectivos del token fueron `Contents: read` y
+`Metadata: read`.
+
+- **Mutación del camino negativo:** solo se borró `.use(middleware.auth())`
+  del grupo `account`. La referencia, el checker y el workflow no cambiaron:
+  el commit toca un único archivo, `backend/start/routes.ts`. Es la misma
+  mutación que la prueba 2 de la tabla anterior, ahora en GitHub. El commit no
+  está firmado; el correo noreply es solo su dirección de autor.
+- **Base `main`:** el workflow filtra PRs hacia `main` y no se tocó el filtro.
+  El diff del PR #2 incluía, por eso, el trabajo acumulado de la rama de
+  publicación.
+- **Cierre:** el PR #2 se cerró sin merge y la rama temporal se borró en
+  local y en el remoto. El PR #1 sigue abierto.
+- **No cuenta como prueba:** antes de subir la rama, `routes:check` en el
+  clone de publicación salió con `2` porque faltaban las dependencias
+  (`@poppinss/ts-exec`). No llegó a comprobar rutas.
+- **El check no es obligatorio:** no hay ruleset ni protección de rama en el
+  fork, así que un resultado en rojo no bloquea el merge.
+- **Pendiente:** el revisor de IA no tiene workflow y su calibración no se
+  probó con ejecuciones reales.
+
 ## Límites
 
 - **Solo la superficie de rutas.** No verifica validadores (campos ni
@@ -192,8 +227,10 @@ copió. No quedaron candidatos en `/tmp`.
 - **Los códigos valen una vez que el script corre.** Con Node < 24, o si el
   script no carga, Node sale con `1`. Ante un `1`, las diferencias se
   reconocen por la línea `Route surface differs …`.
-- **Solo detecta si alguien lo ejecuta.** Ningún CI ni hook lo llama, así que
-  no bloquea commits ni merges.
+- **No bloquea commits ni merges.** Ningún hook lo llama. El workflow
+  `route-surface` lo ejecuta en PRs hacia `main`, pero no es un check
+  obligatorio: no hay ruleset ni protección de rama. Además, un PR puede
+  cambiar el checker, la referencia y el workflow.
 - **Depende de `list:routes`.** Un cambio de su formato hace fallar el control
   con `2`, no lo hace pasar.
 - **Requiere arrancar la aplicación:** Node 24 y un `.env` válido. Que no abra
