@@ -1,0 +1,47 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "status",
+    "reviewed_files",
+    "not_reviewed",
+    "not_verified",
+    "findings",
+    "minor_suggestions"
+  ],
+  "properties": {
+    "status": { "type": "string", "enum": ["complete", "incomplete"] },
+    "reviewed_files": { "type": "array", "items": { "type": "string" } },
+    "not_reviewed": { "type": "array", "items": { "type": "string" } },
+    "not_verified": { "type": "array", "items": { "type": "string" } },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "file", "line", "scenario", "cause"],
+        "properties": {
+          "severity": { "type": "string", "enum": ["alta", "media"] },
+          "file": { "type": "string" },
+          "line": { "type": "integer", "minimum": 1 },
+          "scenario": { "type": "string" },
+          "cause": { "type": "string" }
+        }
+      }
+    },
+    "minor_suggestions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["file", "line", "scenario", "cause"],
+        "properties": {
+          "file": { "type": "string" },
+          "line": { "type": "integer", "minimum": 1 },
+          "scenario": { "type": "string" },
+          "cause": { "type": "string" }
+        }
+      }
+    }
+  }
+}

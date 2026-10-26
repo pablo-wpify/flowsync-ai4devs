@@ -1,0 +1,120 @@
+{
+  "contract": "route-surface",
+  "version": 1,
+  "source": "node ace list:routes --json",
+  "excluded": {
+    "HEAD": "Not listed by list:routes, which has no flag to show it. AdonisJS adds HEAD to every GET route."
+  },
+  "domains": [
+    {
+      "domain": "root",
+      "routes": [
+        {
+          "public": {
+            "methods": [
+              "GET"
+            ],
+            "pattern": "/",
+            "middleware": []
+          },
+          "internal": {
+            "name": "",
+            "handler": {
+              "type": "closure",
+              "name": "closure"
+            },
+            "middleware": []
+          }
+        },
+        {
+          "public": {
+            "methods": [
+              "POST"
+            ],
+            "pattern": "/api/v1/auth/signup",
+            "middleware": []
+          },
+          "internal": {
+            "name": "auth.new_account.store",
+            "handler": {
+              "type": "controller",
+              "moduleNameOrPath": "#controllers/new_account_controller",
+              "method": "store"
+            },
+            "middleware": []
+          }
+        },
+        {
+          "public": {
+            "methods": [
+              "POST"
+            ],
+            "pattern": "/api/v1/auth/login",
+            "middleware": []
+          },
+          "internal": {
+            "name": "auth.access_tokens.store",
+            "handler": {
+              "type": "controller",
+              "moduleNameOrPath": "#controllers/access_tokens_controller",
+              "method": "store"
+            },
+            "middleware": []
+          }
+        },
+        {
+          "public": {
+            "methods": [
+              "GET"
+            ],
+            "pattern": "/api/v1/account/profile",
+            "middleware": [
+              "auth"
+            ]
+          },
+          "internal": {
+            "name": "profile.profile.show",
+            "handler": {
+              "type": "controller",
+              "moduleNameOrPath": "#controllers/profile_controller",
+              "method": "show"
+            },
+            "middleware": [
+              {
+                "name": "auth",
+                "moduleNameOrPath": "#middleware/auth_middleware",
+                "method": "handle"
+              }
+            ]
+          }
+        },
+        {
+          "public": {
+            "methods": [
+              "POST"
+            ],
+            "pattern": "/api/v1/account/logout",
+            "middleware": [
+              "auth"
+            ]
+          },
+          "internal": {
+            "name": "profile.access_tokens.destroy",
+            "handler": {
+              "type": "controller",
+              "moduleNameOrPath": "#controllers/access_tokens_controller",
+              "method": "destroy"
+            },
+            "middleware": [
+              {
+                "name": "auth",
+                "moduleNameOrPath": "#middleware/auth_middleware",
+                "method": "handle"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -15,7 +15,9 @@
     "test": "node ace test",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "routes:check": "node scripts/check_route_surface.ts",
+    "routes:update": "node scripts/check_route_surface.ts --update"
   },
   "imports": {
     "#controllers/*": "./app/controllers/*.js",
